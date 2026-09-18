@@ -483,3 +483,10 @@ svg.graph text { font-size: 10px; fill: var(--text-2); pointer-events: none; }
   display: inline-block;
 }
 .breadcrumb:hover { color: var(--text); }
+
+/* A proactive notice: information, not a warning and not a proposal. */
+.card.notice-card {
+  border-left: 3px solid var(--source);
+  background: var(--source-soft);
+}
+.card.notice-card .title { font-weight: 500; }

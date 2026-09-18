@@ -38,6 +38,7 @@ const VIEWS = [
   { id: 'capture', label: 'Capture' },
   { id: 'review', label: 'Review', badge: 'pendingProposals' },
   { id: 'conflicts', label: 'Conflicts', badge: 'openConflicts', alert: true },
+  { id: 'entities', label: 'People & things' },
   { id: 'timeline', label: 'Timeline' },
   { id: 'graph', label: 'Connections' },
   { id: 'history', label: 'Activity' },
@@ -248,7 +249,16 @@ const views = {
               ? h('button', { class: 'btn', onclick: () => go('review') }, ['Review suggestions'])
               : null,
           ]),
-        ])
+        ]),
+        ...(res.enrichment?.notices ?? []).map((n) =>
+          h('div', { class: 'card notice-card' }, [
+            h('span', { class: 'title' }, [n.message]),
+            h('div', { class: 'reason' }, [n.because]),
+            ...n.objectIds.map((oid) =>
+              h('span', { class: 'citation', onclick: () => go('object', oid) }, ['Open it'])
+            ),
+          ])
+        )
       );
     }
 
@@ -318,12 +328,46 @@ const views = {
     const list = h('div', {});
     list.replaceChildren(...pending.map((p) => proposalCard(p, list)));
 
+    const bulk = async (action, minConfidence) => {
+      const affected = minConfidence
+        ? pending.filter((p) => (p.confidence ?? 0) >= minConfidence).length
+        : pending.length;
+      if (!confirm(`${action === 'accept' ? 'Accept' : 'Decline'} ${affected} suggestion(s)?`)) return;
+
+      const result = await api.post('/proposals/bulk', { action, minConfidence, note: 'bulk review' });
+      toast(
+        `${result.succeeded.length} ${action === 'accept' ? 'added to memory' : 'declined'}` +
+          (result.failed.length ? `, ${result.failed.length} could not be applied` : '')
+      );
+      await refreshStats();
+      renderNav();
+      renderView();
+    };
+
+    const bulkBar =
+      pending.length > 5
+        ? h('div', { class: 'card' }, [
+            h('span', { class: 'title' }, ['Handle several at once']),
+            h('div', { class: 'actions', style: 'margin-top:10px' }, [
+              h('button', { class: 'btn primary', onclick: () => bulk('accept', 0.7) }, [
+                'Accept the confident ones',
+              ]),
+              h('button', { class: 'btn', onclick: () => bulk('accept') }, ['Accept all']),
+              h('button', { class: 'btn quiet', onclick: () => bulk('reject') }, ['Decline all']),
+            ]),
+            h('p', { class: 'hint' }, [
+              'Still your decision, over a set you chose. Nothing here happens on its own.',
+            ]),
+          ])
+        : null;
+
     return h('div', {}, [
       h('h1', {}, ['Review']),
       h('p', { class: 'lede' }, [
         `${pending.length} suggestion${pending.length === 1 ? '' : 's'} waiting. These are proposals — ` +
           'they are not part of your memory until you accept them, and declining one is recorded too.',
       ]),
+      bulkBar,
       list,
     ]);
   },
@@ -457,15 +501,136 @@ const views = {
     ]);
   },
 
+
+  // --------------------------------------------------------- entities
+  async entities() {
+    const [all, duplicates] = await Promise.all([
+      api.get('/entities?limit=200'),
+      api.get('/entities-duplicates'),
+    ]);
+
+    if (!all.length) {
+      return h('div', {}, [
+        h('h1', {}, ['People & things']),
+        h('p', { class: 'lede' }, [
+          'Names, organisations and identifiers Chitraq has pulled out of your notes and linked together.',
+        ]),
+        h('div', { class: 'empty' }, ['Nothing resolved yet. Capture a few notes with names in them.']),
+      ]);
+    }
+
+    const byType = {};
+    for (const e of all) (byType[e.attrs.entityType ?? 'other'] ??= []).push(e);
+
+    return h('div', {}, [
+      h('h1', {}, ['People & things']),
+      h('p', { class: 'lede' }, [
+        'Resolved out of your notes and linked to everything that mentions them. ' +
+          'Chitraq only merges names automatically when they match exactly — anything less is a suggestion.',
+      ]),
+
+      duplicates.length
+        ? h('div', {}, [
+            h('h2', {}, ['Possible duplicates']),
+            ...duplicates.map((d) =>
+              h('div', { class: 'card proposal' }, [
+                h('p', { class: 'body' }, [`“${d.a.title}” and “${d.b.title}” may be the same.`]),
+                h('div', { class: 'reason' }, [d.because]),
+                h('div', { class: 'actions', style: 'margin-top:10px' }, [
+                  h('button', {
+                    class: 'btn primary',
+                    onclick: async () => {
+                      await api.post(`/entities/${d.a.id}/merge`, { mergeId: d.b.id, reason: 'merged in review' });
+                      toast(`Merged into “${d.a.title}”.`);
+                      // Re-render rather than just removing the card: the merge
+                      // changes mention counts and aliases elsewhere on the page.
+                      renderView();
+                    },
+                  }, [`Keep “${truncate(d.a.title, 24)}”`]),
+                  h('button', {
+                    class: 'btn',
+                    onclick: async () => {
+                      await api.post(`/entities/${d.b.id}/merge`, { mergeId: d.a.id, reason: 'merged in review' });
+                      toast(`Merged into “${d.b.title}”.`);
+                      renderView();
+                    },
+                  }, [`Keep “${truncate(d.b.title, 24)}”`]),
+                  h('button', {
+                    class: 'btn quiet',
+                    onclick: (e) => e.target.closest('.card').remove(),
+                  }, ['Different things']),
+                ]),
+              ])
+            ),
+          ])
+        : null,
+
+      ...Object.entries(byType).map(([type, list]) =>
+        h('div', {}, [
+          h('h2', {}, [type]),
+          h('div', { class: 'card' },
+            list.map((e) =>
+              h('div', { class: 'timeline-entry' }, [
+                h('span', { class: 'when' }, [`${e.mentions} mention${e.mentions === 1 ? '' : 's'}`]),
+                h('div', {}, [
+                  h('span', { class: 'citation', style: 'margin-left:0', onclick: () => go('entity', e.id) }, [e.title]),
+                  e.attrs.aliases?.length
+                    ? h('span', { class: 'meta' }, [` also known as ${e.attrs.aliases.join(', ')}`])
+                    : null,
+                ]),
+              ])
+            )
+          ),
+        ])
+      ),
+    ]);
+  },
+
+  async entity(id) {
+    if (!id) return notFound();
+    const d = await api.get(`/entities/${id}`);
+
+    return h('div', {}, [
+      h('span', { class: 'breadcrumb', onclick: () => go('entities') }, ['← people & things']),
+      h('h1', {}, [d.object.title]),
+      h('div', { class: 'badges' }, [
+        badge(d.object.attrs.entityType ?? 'other', 'kind'),
+        badge('derived', 'origin-algorithm'),
+        ...(d.object.attrs.aliases ?? []).map((a) => badge(a, 'plain')),
+      ]),
+
+      h('h2', {}, [`Mentioned in ${d.mentionedIn.length}`]),
+      h('div', { class: 'card' },
+        d.mentionedIn.map((m) =>
+          h('div', { class: 'timeline-entry' }, [
+            h('span', { class: 'when' }, [(m.occurred_at ?? m.created_at).slice(0, 10)]),
+            h('span', { class: 'citation', style: 'margin-left:0', onclick: () => go('object', m.id) }, [m.title]),
+          ])
+        )
+      ),
+    ]);
+  },
+
   // ----------------------------------------------------------- status
   async status() {
-    const [caps, stats] = await Promise.all([api.get('/capabilities'), api.get('/stats')]);
+    const [caps, stats, notices, costs] = await Promise.all([
+      api.get('/capabilities'),
+      api.get('/stats'),
+      api.get('/notices'),
+      api.get('/costs'),
+    ]);
 
     return h('div', {}, [
       h('h1', {}, ['Status']),
       h('p', { class: 'lede' }, ['What memory holds, and which intelligence is available to work over it.']),
 
       ...(stats.health?.warnings ?? []).map((w) => h('div', { class: 'notice' }, [w])),
+      ...notices.map((n) =>
+        h('div', { class: 'card notice-card' }, [
+          h('span', { class: 'title' }, [n.message]),
+          h('div', { class: 'reason' }, [n.because]),
+        ])
+      ),
 
       h('div', { class: 'stat-grid' }, [
         stat(stats.objects, 'objects'),
@@ -516,6 +681,24 @@ const views = {
         )
       ),
 
+      costs.totals.calls > 0
+        ? h('div', {}, [
+            h('h2', {}, ['What intelligence has cost']),
+            h('div', { class: 'card' }, [
+              h('dl', { class: 'kv' }, [
+                h('dt', {}, ['Last 30 days']),
+                h('dd', {}, [`${costs.totals.cost} across ${costs.totals.calls} calls`]),
+                ...costs.byProvider.flatMap((p) => [
+                  h('dt', {}, [String(p.provider)]),
+                  h('dd', {}, [
+                    `${p.calls} calls · ${p.cost}${p.failures ? ` · ${p.failures} failed` : ''}`,
+                  ]),
+                ]),
+              ]),
+            ]),
+          ])
+        : null,
+
       h('h2', {}, ['Policy']),
       h('div', { class: 'card' }, [
         h('dl', { class: 'kv' }, [
@@ -544,6 +727,19 @@ const views = {
           class: 'btn quiet',
           onclick: () => window.open('/api/export', '_blank'),
         }, ['Export everything']),
+        h('button', {
+          class: 'btn quiet',
+          onclick: async (e) => {
+            e.target.disabled = true;
+            const r = await api.post('/vector-index/benchmark', {});
+            toast(
+              r.usable
+                ? `exact ${r.exactMsPerQuery}ms vs approximate ${r.annMsPerQuery}ms, recall ${r.recall} — ${r.verdict}`
+                : r.reason
+            );
+            e.target.disabled = false;
+          },
+        }, ['Measure vector search']),
       ]),
     ]);
   },
@@ -738,6 +934,18 @@ function answerView(a) {
     nodes.push(
       h('div', { class: 'answer ungrounded' }, [
         h('p', {}, [a.uncertainty ?? 'Memory does not contain an answer to this.']),
+      ])
+    );
+  }
+
+  for (const notice of a.notices ?? []) {
+    nodes.push(
+      h('div', { class: 'card notice-card' }, [
+        h('span', { class: 'title' }, [notice.message]),
+        h('div', { class: 'reason' }, [notice.because]),
+        ...notice.objectIds.map((oid) =>
+          h('span', { class: 'citation', onclick: () => go('object', oid) }, ['Open it'])
+        ),
       ])
     );
   }

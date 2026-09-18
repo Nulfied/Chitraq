@@ -50,6 +50,11 @@ accept turns one into state — carrying the capability, provider, model and run
 that produced it. A model cannot claim to be you, cannot rewrite something you
 confirmed, and cannot change provenance, review status or permissions.
 
+**Disagreement is recorded, never resolved behind your back.** Two notes that
+contradict each other, a figure that changed, the same object edited on two
+devices — in every case Chitraq keeps both, shows them together, and asks. The
+alternative is silently discarding one, which is how memory becomes untrustworthy.
+
 ---
 
 ## It works with no AI at all
@@ -97,7 +102,7 @@ The CLI talks to the engine directly, so it works with no server running.
 
 ```bash
 chitraq remember "Chose SQLite because it needs no server"
-chitraq ingest notes/architecture.md
+chitraq ingest notes/architecture.md      # also .pdf, .html, .csv, .json
 chitraq search 'kind:decision sqlite after:2025-01'
 chitraq ask "why did we drop the redis cache"
 chitraq review                # proposals waiting for you
@@ -135,15 +140,40 @@ budget is the *smallest sufficient* context, not the largest possible.
 
 ---
 
+## More than a pile of notes
+
+**People and things.** Names, organisations and ticket ids are resolved out of
+your notes into entities that many notes point at. Only an exact match on a
+name or recorded alias merges automatically; anything weaker is a suggestion,
+because a wrong merge fuses two histories and is tedious to unpick.
+
+**It tells you things.** "You wrote something close to this eight months ago."
+"This disagrees with a decision on record." "This answer rests on a figure
+nobody has checked in a year." Every notice is read-only, explains itself, and
+points at the object rather than asserting anything. Silence is the default.
+
+**It moves between machines.** `chitraq export` and import round-trip a whole
+workspace with history and provenance intact. Two installations can exchange
+just what changed since they last spoke — and where both edited the same thing,
+you get a conflict to resolve, not a silent overwrite.
+
+**It knows what it costs.** Every capability call records its provider, model,
+latency and cost. Set a daily or monthly ceiling and paid providers stop being
+offered when it is reached; the free and deterministic ones answer instead, so
+running out of budget costs you an answer, never your memory.
+
+---
+
 ## Layout
 
 ```
-src/core/          objects, relations, sources, evidence, events, history
+src/core/          objects, relations, sources, evidence, events, history,
+                   entities, auth, sync, import/export
                    — the deterministic memory engine, no AI anywhere in it
 src/retrieval/     query parsing, indexing, lexical + vector + hybrid search
 src/context/       context construction and rendering
 src/intelligence/  capability registry, router, proposal gateway, providers
-src/capture/       parsers and ingestion
+src/capture/       parsers (text, markdown, html, csv, json, pdf) and ingestion
 src/server/        HTTP API
 src/cli/           command line
 web/               browser interface
@@ -163,11 +193,17 @@ partial, and what is designed but not built.
 npm test
 ```
 
-78 tests covering the invariants, not just the happy path: that AI cannot
+174 tests covering the invariants, not just the happy path: that AI cannot
 overwrite your edges, that a stale proposal is refused at accept time, that
 memory survives the total loss of every intelligence provider, that superseded
-pricing never appears as current, that the index is fully rebuildable, and that
-erasure leaves an audit trail.
+pricing never appears as current, that two devices editing the same note raises
+a conflict instead of losing one, that running out of budget never blocks
+capture, and that erasure leaves an audit trail.
+
+```bash
+node scripts/bench-vectors.js 6000   # measure approximate vs exact search
+node scripts/check-ollama.js         # verify a live Ollama endpoint
+```
 
 ---
 

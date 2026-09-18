@@ -170,6 +170,32 @@ We decided to defer the approximate-nearest-neighbour work until someone hits a 
 Sanjay raised that the embedding model is the weak link, not the index.`,
 });
 
+
+// --- people and organisations, so entity resolution has something to do ----
+
+await c.remember({
+  title: 'Kickoff with Priya Rao on the migration',
+  body:
+    'Priya Rao walked the team through the migration plan. Acme Ltd will keep the old ' +
+    'gateway running until the cutover, tracked as OPS-412.',
+  kind: 'event',
+  occurredAt: daysAgo(35),
+});
+
+await c.remember({
+  title: 'Migration sign-off',
+  body: 'Priya Rao signed off the migration after the load test. Acme Ltd confirmed the cutover window.',
+  kind: 'decision',
+  occurredAt: daysAgo(20),
+});
+
+await c.remember({
+  title: 'Escalation path for the gateway',
+  body: 'Priya R Rao is the escalation contact for anything touching the payment gateway.',
+  kind: 'note',
+  occurredAt: daysAgo(12),
+});
+
 const stats = c.stats();
 console.log(`  ${stats.objects} objects`);
 console.log(`  ${stats.relations} relationships`);

@@ -29,6 +29,11 @@ const COMMANDS = {
   conflicts: { args: '', help: 'Disagreements Chitraq has noticed.' },
   forget: { args: '<id>', help: 'Remove from retrieval, keeping history.' },
   erase: { args: '<id> <reason...>', help: 'Irreversibly destroy an object and its history.' },
+  entities: { args: '', help: 'People, organisations and identifiers found in your notes.' },
+  merge: { args: '<keepId> <mergeId>', help: 'Merge two entities into one.' },
+  notices: { args: '', help: 'Things worth knowing without asking.' },
+  costs: { args: '', help: 'What intelligence has cost, by provider and capability.' },
+  import: { args: '<file>', help: 'Import a Chitraq export into this memory.' },
   status: { args: '', help: 'What memory holds and which intelligence is available.' },
   reindex: { args: '', help: 'Rebuild every derived index from the objects.' },
   export: { args: '', help: 'Print the whole workspace as JSON.' },
@@ -238,7 +243,111 @@ async function run(command, rest, flags, c) {
       break;
     }
 
+    case 'entities': {
+      const all = c.entities({ entityType: flags.type, limit: Number(flags.limit ?? 50) });
+      if (!all.length) {
+        console.log('\n  Nothing resolved yet. Capture some notes with names in them.\n');
+        break;
+      }
+      console.log('');
+      for (const e of all) {
+        const aliases = e.attrs.aliases?.length ? dim(`  (also ${e.attrs.aliases.join(', ')})`) : '';
+        console.log(
+          `  ${String(e.mentions).padStart(3)}×  ${e.title}${aliases}  ${dim(`[${e.attrs.entityType}] ${e.id}`)}`
+        );
+      }
+
+      const duplicates = c.duplicateEntities();
+      if (duplicates.length) {
+        console.log(`\n  ${duplicates.length} possible duplicate(s):`);
+        for (const d of duplicates) {
+          console.log(`    "${d.a.title}" / "${d.b.title}"  ${dim(d.because)}`);
+          console.log(`      ${dim(`chitraq merge ${d.a.id} ${d.b.id}`)}`);
+        }
+      }
+      console.log('');
+      break;
+    }
+
+    case 'merge': {
+      const [keepId, mergeId] = rest;
+      if (!keepId || !mergeId) throw new Error('Usage: chitraq merge <keepId> <mergeId>');
+      const result = c.mergeEntities(keepId, mergeId, flags.reason);
+      console.log(
+        `\n  merged — ${result.movedRelations} mention(s) moved, kept as aliases: ${result.aliases.join(', ') || 'none'}\n`
+      );
+      break;
+    }
+
+    case 'notices': {
+      const notices = c.notices();
+      if (!notices.length) {
+        console.log('\n  Nothing to flag.\n');
+        break;
+      }
+      console.log('');
+      for (const n of notices) {
+        console.log(`  ${n.message}`);
+        console.log(`    ${dim(n.because)}`);
+        for (const oid of n.objectIds) console.log(`    ${dim(oid)}`);
+        console.log('');
+      }
+      break;
+    }
+
+    case 'costs': {
+      const report = c.costs();
+      console.log(`\n  ${report.totals.cost} across ${report.totals.calls} calls since ${report.since.slice(0, 10)}`);
+      if (report.totals.failures) console.log(`  ${report.totals.failures} call(s) failed`);
+
+      if (report.byProvider.length) {
+        console.log('\n  by provider');
+        for (const p of report.byProvider) {
+          console.log(
+            `    ${String(p.calls).padStart(5)}  ${String(p.provider).padEnd(12)} ${p.cost}` +
+              dim(`  ${p.avg_latency_ms ?? '?'}ms avg`)
+          );
+        }
+      }
+      if (report.byCapability.length) {
+        console.log('\n  by capability');
+        for (const cap of report.byCapability) {
+          console.log(`    ${String(cap.calls).padStart(5)}  ${String(cap.capability).padEnd(20)} ${cap.cost}`);
+        }
+      }
+      console.log('');
+      break;
+    }
+
+    case 'import': {
+      const target = rest[0];
+      if (!target) throw new Error('Give the path to a Chitraq export.');
+      const payload = JSON.parse(await readFile(target, 'utf8'));
+
+      const result = await c.import(payload, { dryRun: !!flags['dry-run'] });
+      const counts = Object.entries(result.imported).map(([k, n]) => `${n} ${k}`).join(', ');
+
+      console.log(`\n  ${result.dryRun ? 'would import' : 'imported'}  ${counts || 'nothing new'}`);
+      const skipped = Object.entries(result.skipped).map(([k, n]) => `${n} ${k}`).join(', ');
+      if (skipped) console.log(`  already here  ${skipped}`);
+      for (const w of result.warnings) console.log(`  ⚠ ${w}`);
+      console.log('');
+      break;
+    }
+
     case 'review': {
+      if (flags['accept-all'] || flags['accept-above'] || flags['reject-all']) {
+        const result = await c.reviewAll({
+          action: flags['reject-all'] ? 'reject' : 'accept',
+          minConfidence: flags['accept-above'] ? Number(flags['accept-above']) : undefined,
+          note: 'bulk review from the command line',
+        });
+        console.log(`\n  ${result.succeeded.length} applied, ${result.failed.length} could not be`);
+        for (const f of result.failed.slice(0, 5)) console.log(`    ${dim(`${f.id}: ${f.error}`)}`);
+        console.log('');
+        break;
+      }
+
       const pending = c.pending({ limit: Number(flags.limit ?? 20) });
       if (!pending.length) {
         console.log('\n  Nothing waiting for review.\n');
@@ -251,7 +360,10 @@ async function run(command, rest, flags, c) {
         if (p.rationale) console.log(`    ${dim(p.rationale)}`);
         console.log('');
       }
-      console.log(`  Accept with: chitraq accept <id>   ·   Decline with: chitraq reject <id>\n`);
+      console.log(`  Accept with: chitraq accept <id>   ·   Decline with: chitraq reject <id>`);
+      console.log(
+        `  Or in bulk:  chitraq review --accept-all   ·   chitraq review --accept-above 0.7\n`
+      );
       break;
     }
 
@@ -396,6 +508,9 @@ function usage(code = 0) {
   console.log(`
   Options
     --db <path>     use a specific memory store
+    --accept-all    accept every pending proposal (with 'review')
+    --accept-above <n>  accept proposals at or above this confidence
+    --dry-run       for 'import': report what would happen, write nothing
     --limit <n>     how many results
     --why           show why each search result ranked where it did
     --context       show the context an answer was built from
