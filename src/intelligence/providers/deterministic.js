@@ -16,6 +16,7 @@
  */
 
 import { Capability } from '../registry.js';
+import { isKnownPlace } from '../../core/gazetteer.js';
 import {
   contentTerms, matchTerms, tokenize, sentences, charNgrams, termFrequency,
   lexicalSimilarity, estimateTokens, normalise,
@@ -69,7 +70,11 @@ export function deterministicProvider(db) {
         costMicros: 0,
         run: async (task) => ({
           entities: entities(task.text ?? ''),
-          uncertainty: 'Pattern-based. High precision on dates, URLs, emails and quantities; names are guesses from capitalisation.',
+          uncertainty:
+            'Pattern-based. High precision on dates, URLs, emails and quantities. '
+            + 'Places come from a short list of countries and large cities plus phrases like '
+            + '"based in"; products and projects from phrasing like "the billing API" or '
+            + '"the Atlas migration". Everything else capitalised is a guess.',
         }),
       },
 
@@ -284,6 +289,40 @@ const ENTITY_PATTERNS = [
   { type: 'version', re: /\bv?\d+\.\d+(?:\.\d+)?\b/g, confidence: 0.7 },
   { type: 'identifier', re: /\b[A-Z]{2,}-\d+\b/g, confidence: 0.85 },
   { type: 'time', re: /\b\d{1,2}:\d{2}(?::\d{2})?\s?(?:am|pm)?\b/gi, confidence: 0.85 },
+
+  // Things named by the shape of the phrase around them rather than by the
+  // words themselves. Each of these is a cue a person actually writes, which
+  // is why they hold up: "the Atlas migration", "our Mumbai office",
+  // "Postgres 16", "the billing API".
+  {
+    type: 'project',
+    re: /\b(?:[Pp]roject\s+([A-Z][\w-]*)|(?:[Tt]he\s+)?((?![Tt]he\b)[A-Z][\w-]*(?:[ \t](?!migration|project)[A-Z][\w-]*)?)\s+(?:project|migration|rollout|initiative|programme|program|rewrite))\b/g,
+    confidence: 0.7,
+    group: 'first',
+  },
+  {
+    type: 'product',
+    re: /\b([A-Z][\w.+-]*(?:[ \t][A-Z][\w.+-]*)?)\s+(?:API|SDK|CLI|plugin|extension|library|framework|database|dashboard|service|app|platform|integration)\b/g,
+    confidence: 0.65,
+    group: 'first',
+  },
+  {
+    // A capitalised name immediately followed by a version is a product
+    // essentially always: "Postgres 16", "Node 24.18", "Python 3.11".
+    type: 'product',
+    re: /\b([A-Z][\w.+-]{2,})\s+v?\d+(?:\.\d+)*\b/g,
+    confidence: 0.75,
+    group: 'first',
+  },
+  {
+    // Location cues. "in" alone is far too loose — it introduces as many
+    // abstractions as places — so this takes only the phrasings that are
+    // almost always geographic.
+    type: 'place',
+    re: /\b(?:based\s+in|office\s+in|located\s+in|travel(?:l?ing)?\s+to|flew\s+to|moved\s+to|shipped\s+to|headquartered\s+in)\s+([A-Z][\p{Ll}]+(?:[ \t][A-Z][\p{Ll}]+)?)/gu,
+    confidence: 0.75,
+    group: 'first',
+  },
 ];
 
 /**
@@ -301,46 +340,132 @@ export function entities(text) {
   /** @type {Map<string, any>} */
   const found = new Map();
 
-  for (const { type, re, confidence } of ENTITY_PATTERNS) {
+  for (const { type, re, confidence, group } of ENTITY_PATTERNS) {
     for (const m of text.matchAll(re)) {
-      const value = m[0].trim();
-      const key = `${type}:${normalise(value)}`;
-      if (!found.has(key)) {
-        found.set(key, { text: value, type, confidence, offset: m.index ?? 0 });
-      }
+      // Cue patterns match a phrase but mean only the name inside it: "based in
+      // Pune" is a place called Pune, not one called "based in Pune".
+      const value = (group === 'first' ? firstGroup(m) : m[0])?.trim();
+      if (!value) continue;
+
+      remember(found, { text: value, type, confidence, offset: m.index ?? 0 });
     }
   }
 
-  // Capitalised runs that are not sentence-initial: a proper-name signal.
+  // Capitalised runs: a proper-name signal.
   //
   // The separator is [ \t]+ and not \s+ on purpose. \s crosses newlines, so a
   // title ending in a name followed by a body starting with the same name gets
   // captured as one four-word "name" spanning the break.
-  for (const m of text.matchAll(/(?<![.!?]\s|^)\b([A-Z][\p{Ll}]+(?:[ \t]+(?:of|and|&|[A-Z][\p{Ll}]*)){0,3})\b/gu)) {
-    const value = m[1].trim().replace(/\s+(of|and|&)$/i, '');
+  //
+  // Sentence-initial capitals used to be skipped outright, because the first
+  // word of a sentence is capitalised for grammar rather than because it names
+  // anything. That also threw away every name that happened to start a
+  // sentence — "Priya Sharma at Acme" came back as "Sharma". The rule is now
+  // narrower: at a sentence start a single capitalised word proves nothing, but
+  // a run of them still does.
+  for (const m of text.matchAll(/\b([A-Z][\p{Ll}]+(?:[ \t]+(?:of|and|&|[A-Z][\p{Ll}]*)){0,3})\b/gu)) {
+    // A leading article or cue word is grammar, not part of the name. Left in,
+    // "The Atlas migration" yields a person called The Atlas, and "Project
+    // Nimbus" one called Project Nimbus — both alongside the correct project.
+    const value = m[1]
+      .trim()
+      .replace(/\s+(of|and|&)$/i, '')
+      .replace(LEADING_NOISE, '')
+      .trim();
     if (value.length < 3) continue;
     if (STOPISH_CAPS.has(value.toLowerCase())) continue;
 
+    const atSentenceStart = startsSentence(text, m.index ?? 0);
+    if (atSentenceStart && !value.includes(' ')) continue;
+
     const multiWord = value.includes(' ');
-    const key = `name:${normalise(value)}`;
-    if (!found.has(key)) {
-      found.set(key, {
-        text: value,
-        type: ORG_SUFFIX.test(value) ? 'organisation' : 'name',
-        // A multi-word capitalised run mid-sentence is a fair bet. A single
-        // capitalised word is not — it is as likely to be a product, a month
-        // or the start of a clause the sentence splitter mishandled.
-        confidence: multiWord ? 0.65 : 0.35,
-        offset: m.index ?? 0,
-      });
-    }
+    remember(found, {
+      text: value,
+      type: typeOfCapitalisedRun(value),
+      // A multi-word capitalised run is a fair bet. A single capitalised word
+      // is not — it is as likely to be a product, a month or the start of a
+      // clause the sentence splitter mishandled.
+      //
+      // Position deliberately does not change this number. What position tells
+      // you is whether the *first* capital is informative, and that is already
+      // handled above by dropping single words at a sentence start. Demoting a
+      // run as well pushed real names under the linking threshold, which is a
+      // worse error than the one it guarded against.
+      confidence: multiWord ? 0.65 : 0.35,
+      offset: m.index ?? 0,
+    });
   }
 
   return [...found.values()].sort((a, b) => a.offset - b.offset);
 }
 
+/**
+ * What a bare capitalised phrase most likely is.
+ *
+ * Order matters and encodes confidence. A legal suffix is decisive; a known
+ * place name is nearly so; everything left over falls to "name", which is the
+ * guess it has always been and is still labelled as one.
+ *
+ * @param {string} value
+ */
+function typeOfCapitalisedRun(value) {
+  if (ORG_SUFFIX.test(value)) return 'organisation';
+  if (isKnownPlace(value)) return 'place';
+  return 'name';
+}
+
+/**
+ * Record a candidate, keyed on the name rather than on the pattern that found
+ * it.
+ *
+ * Several patterns legitimately hit the same word: "based in Pune" says place
+ * with confidence, and the capitalised-run sweep says it again with a shrug.
+ * Keying on type as well would emit both, and the graph would end up with two
+ * Punes — one a place, one a guess at a person. The strongest reading wins, and
+ * the earliest position is kept so ordering stays stable.
+ *
+ * @param {Map<string, any>} found
+ * @param {{text: string, type: string, confidence: number, offset: number}} candidate
+ */
+function remember(found, candidate) {
+  const key = normalise(candidate.text);
+  const existing = found.get(key);
+  if (!existing) {
+    found.set(key, candidate);
+    return;
+  }
+  if (candidate.confidence > existing.confidence) {
+    found.set(key, { ...candidate, offset: Math.min(existing.offset, candidate.offset) });
+  }
+}
+
+/**
+ * Is this position the first word of a sentence, where a capital means nothing?
+ *
+ * @param {string} text
+ * @param {number} index
+ */
+function startsSentence(text, index) {
+  if (index === 0) return true;
+  return /(?:^|[.!?:;]|\n)\s*$/.test(text.slice(Math.max(0, index - 12), index));
+}
+
+/** @param {RegExpMatchArray} m */
+function firstGroup(m) {
+  for (let i = 1; i < m.length; i++) if (m[i]) return m[i];
+  return null;
+}
+
 /** Legal-form suffixes that reliably mark an organisation rather than a person. */
 const ORG_SUFFIX = /\b(ltd|limited|inc|llc|llp|plc|gmbh|corp|corporation|company|co|group|holdings|partners|labs|technologies|systems|foundation|university|institute)\b\.?$/i;
+
+/**
+ * Words that introduce a name without being part of it.
+ *
+ * Kept short on purpose. Every addition here is a word that can never begin a
+ * real name, and the list stops being safe the moment that is only mostly true.
+ */
+const LEADING_NOISE = /^(?:The|A|An|This|That|These|Those|Our|My|Their|Its|Project|Team|Mr|Mrs|Ms|Dr)\s+/;
 
 const STOPISH_CAPS = new Set([
   'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',

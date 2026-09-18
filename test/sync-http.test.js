@@ -82,13 +82,13 @@ test('a dry run moves nothing on either side', async (t) => {
   assert.equal(report.dryRun, true);
   assert.equal(report.pushed.objects, 1, 'reports what it would send');
 
-  const onB = b.chitraq.db.prepare('SELECT COUNT(*) n FROM object').get();
+  const onB = b.chitraq.db.prepare("SELECT COUNT(*) n FROM object WHERE kind != 'entity'").get();
   assert.equal(Number(onB.n), 0, 'B wrote nothing');
 
   // And the cursor did not move, so the real sync still has work to do.
   const real = await a.chitraq.syncOverHttp(b.url);
   assert.equal(real.pushed.objects, 1, 'the dry run did not consume the change');
-  assert.equal(Number(b.chitraq.db.prepare('SELECT COUNT(*) n FROM object').get().n), 1);
+  assert.equal(Number(b.chitraq.db.prepare("SELECT COUNT(*) n FROM object WHERE kind != 'entity'").get().n), 1);
 });
 
 test('push-only and pull-only move knowledge one way', async (t) => {
@@ -105,8 +105,8 @@ test('push-only and pull-only move knowledge one way', async (t) => {
   const pushed = await a.chitraq.syncOverHttp(b.url, { direction: 'push' });
   assert.ok(pushed.pushed);
   assert.equal(pushed.pulled, undefined, 'nothing was pulled');
-  assert.equal(Number(a.chitraq.db.prepare('SELECT COUNT(*) n FROM object').get().n), 1, 'A unchanged');
-  assert.equal(Number(b.chitraq.db.prepare('SELECT COUNT(*) n FROM object').get().n), 2, 'B got it');
+  assert.equal(Number(a.chitraq.db.prepare("SELECT COUNT(*) n FROM object WHERE kind != 'entity'").get().n), 1, 'A unchanged');
+  assert.equal(Number(b.chitraq.db.prepare("SELECT COUNT(*) n FROM object WHERE kind != 'entity'").get().n), 2, 'B got it');
 
   const pulled = await a.chitraq.syncOverHttp(b.url, { direction: 'pull' });
   assert.equal(pulled.pushed, undefined);
@@ -152,7 +152,7 @@ test('sync never deletes: a peer that has not seen your object cannot remove it'
   await b.chitraq.remember({ title: 'Also kept', body: 'B has this and A does not.' });
 
   await a.chitraq.syncOverHttp(b.url, { direction: 'pull' });
-  assert.equal(Number(a.chitraq.db.prepare('SELECT COUNT(*) n FROM object').get().n), 2, 'A kept its own');
+  assert.equal(Number(a.chitraq.db.prepare("SELECT COUNT(*) n FROM object WHERE kind != 'entity'").get().n), 2, 'A kept its own');
 });
 
 test('pointing sync at itself is refused in words', async (t) => {
@@ -245,6 +245,6 @@ test('a batched sync says there is more, and loses nothing across rounds', async
     if (++rounds > 10) throw new Error('sync did not converge');
   }
 
-  const onB = Number(b.chitraq.db.prepare('SELECT COUNT(*) n FROM object').get().n);
+  const onB = Number(b.chitraq.db.prepare("SELECT COUNT(*) n FROM object WHERE kind != 'entity'").get().n);
   assert.equal(onB, 12, 'every note arrived across the rounds');
 });
