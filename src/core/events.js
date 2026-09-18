@@ -36,6 +36,9 @@ export const EventType = Object.freeze({
   QueryAsked: 'QueryAsked',
   ContextBuilt: 'ContextBuilt',
   UserCorrectionRecorded: 'UserCorrectionRecorded',
+  // A key was added, replaced or removed. Recorded by fingerprint only:
+  // an audit log that leaks the thing it audits is worse than none.
+  CredentialChanged: 'CredentialChanged',
 });
 
 /**

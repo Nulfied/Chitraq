@@ -287,6 +287,21 @@ export function createApp(chitraq, opts = {}) {
 
   route('GET', '/api/auth/sessions', () => chitraq.sessions());
 
+  // ------------------------------------------------------- your own keys
+  //
+  // There is no route that reads a key back. Storing one is write-only by
+  // design: an endpoint that returns a key is an endpoint that can leak one.
+
+  route('GET', '/api/keys', () => ({ keys: chitraq.apiKeys() }));
+
+  route('POST', '/api/keys', ({ body }) =>
+    chitraq.setApiKey({ provider: body.provider, key: body.key, label: body.label })
+  );
+
+  route('DELETE', '/api/keys/:provider', ({ params }) =>
+    chitraq.removeApiKey({ provider: params.provider })
+  );
+
   // ------------------------------------------------------------ handler
 
   const server = createServer(async (req, res) => {

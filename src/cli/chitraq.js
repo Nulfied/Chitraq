@@ -39,6 +39,7 @@ const COMMANDS = {
   import: { args: '<file>', help: 'Import a Chitraq export into this memory.' },
   sync: { args: '<url>', help: 'Exchange changes with another Chitraq. Use --push, --pull, --dry-run.' },
   peers: { args: '', help: 'Machines this memory has exchanged changes with.' },
+  keys: { args: '', help: 'API keys you have supplied. Add with --set, remove with --remove.' },
   status: { args: '', help: 'What memory holds and which intelligence is available.' },
   reindex: { args: '', help: 'Rebuild every derived index from the objects.' },
   export: { args: '', help: 'Print the whole workspace as JSON.' },
@@ -217,6 +218,59 @@ async function run(command, rest, flags, c) {
         console.log(`  ${peer.id}`);
         console.log(`    ${dim(`last contact ${peer.last_contact ?? 'never'}`)}`);
         console.log(`    ${dim(`sent up to ${peer.last_pushed ?? '\u2014'} \u00b7 received up to ${peer.last_pulled ?? '\u2014'}`)}`);
+      }
+      console.log('');
+      break;
+    }
+
+    case 'keys': {
+      if (flags.remove) {
+        const removed = c.removeApiKey({ provider: String(flags.remove) });
+        console.log(`\n  removed the ${removed.provider} key\n`);
+        break;
+      }
+
+      if (flags.set) {
+        const provider = String(flags.set);
+        // Read from an environment variable rather than an argument. A key on
+        // the command line lands in shell history and in the process list,
+        // where it outlives any care taken storing it.
+        const key = process.env.CHITRAQ_KEY;
+        if (!key) {
+          console.log(`\n  Put the key in CHITRAQ_KEY, not on the command line:`);
+          console.log(`\n    CHITRAQ_KEY=sk-... chitraq keys --set ${provider}`);
+          console.log(`\n  An argument would be recorded in your shell history and visible`);
+          console.log(`  to anything that can list processes.\n`);
+          process.exitCode = 1;
+          break;
+        }
+
+        const result = c.setApiKey({ provider, key, label: flags.label });
+        console.log(`\n  ${(result.replaced ? 'replaced' : 'stored').padEnd(10)}  the ${provider} key (\u2026${result.hint})`);
+        if (result.active) {
+          console.log(`  active      Chitraq will use it for ${provider} from now on`);
+        } else {
+          console.log(`  \u26a0 stored but not active: ${result.error ?? 'nothing here can use a key for that provider yet'}`);
+        }
+        console.log('');
+        break;
+      }
+
+      const stored = c.apiKeys();
+      if (!stored.length) {
+        console.log(`\n  No keys stored. Chitraq works without any \u2014 this is only for`);
+        console.log(`  reaching a model it does not run itself.`);
+        console.log(`\n    CHITRAQ_KEY=sk-... chitraq keys --set anthropic\n`);
+        break;
+      }
+      console.log('');
+      for (const k of stored) {
+        const state = !k.readable ? 'unreadable' : k.active ? 'active' : 'stored';
+        console.log(`  ${k.provider.padEnd(12)} ${k.masked.padEnd(8)} ${state}`);
+        console.log(`    ${dim(`added ${k.createdAt}${k.lastUsed ? ` \u00b7 last used ${k.lastUsed}` : ''}`)}`);
+        if (!k.readable) {
+          console.log(`    ${dim('sealed with a secret this machine no longer has \u2014 set it again')}`);
+        }
       }
       console.log('');
       break;
@@ -623,6 +677,11 @@ function usage(code = 0) {
     --no-cache      skip the answer cache
     --why           show why each search result ranked where it did
     --context       show the context an answer was built from
+
+  Options for 'keys'
+    --set <provider>   store a key, read from the CHITRAQ_KEY variable
+    --remove <provider>  forget a stored key
+    --label <text>     a name for it, so you know which key it is
 
   Options for 'sync'
     --push          only send; do not take anything in

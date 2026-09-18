@@ -26,6 +26,7 @@ import * as objects from './core/objects.js';
 import * as entities from './core/entities.js';
 import * as transfer from './core/transfer.js';
 import * as auth from './core/auth.js';
+import * as keys from './core/keys.js';
 import * as sync from './core/sync.js';
 import { httpPeer, isRemoteHost } from './core/sync-http.js';
 import * as relations from './core/relations.js';
@@ -35,6 +36,7 @@ import * as events from './core/events.js';
 import { Registry, Capability } from './intelligence/registry.js';
 import { Router, DEFAULT_POLICY, runHistory, measuredLatency } from './intelligence/router.js';
 import { deterministicProvider, EMBED_MODEL } from './intelligence/providers/deterministic.js';
+import { providerFromKey, keyedIdFor, BUILDABLE } from './intelligence/providers/from-key.js';
 import * as gateway from './intelligence/gateway.js';
 import * as budget from './intelligence/budget.js';
 import * as indexer from './retrieval/indexer.js';
@@ -64,6 +66,8 @@ export class Chitraq {
    * @param {import('./intelligence/router.js').Policy} [opts.policy]
    * @param {import('./intelligence/registry.js').Provider[]} [opts.providers] extra providers
    * @param {{autoAccept?: Record<string, number|null>}} [opts.acceptPolicy]
+   * @param {string} [opts.keySecret]   seals stored API keys; defaults to a file beside the store
+   * @param {Record<string, any>} [opts.keyedProviderOptions] per-provider settings for BYO keys
    */
   constructor(opts = {}) {
     this.db = open(opts.path ?? ':memory:');
@@ -95,6 +99,139 @@ export class Chitraq {
     };
     this.principal = boot.principal;
     this.actor = { id: boot.principal.id, kind: /** @type {const} */ ('user') };
+
+    // A secret supplied directly rather than found on disk. Tests need this;
+    // so does a hosted deployment holding it in a real secret manager.
+    this.keySecret = opts.keySecret ? keys.masterSecret({ secret: opts.keySecret }) : undefined;
+    /** @type {Record<string, any>} */
+    this.keyedProviderOptions = opts.keyedProviderOptions ?? {};
+
+    // Whatever this person already brought, put to work immediately.
+    this.loadKeyedProviders();
+  }
+
+  // ========================================================== BYO KEYS
+
+  /**
+   * Register a provider for every key the current principal has stored.
+   *
+   * Called at startup and after any key change. Keyed providers are registered
+   * under their own ids, so an installation-wide key set by whoever runs the
+   * server and a person's own key can both exist — the router sees two
+   * providers, not one being overwritten, because they are two arrangements
+   * with two different bills.
+   *
+   * A key that cannot be opened does not throw here. Startup failing because of
+   * a rotated secret would take the whole memory down over an optional extra.
+   *
+   * @returns {{registered: string[], failed: Array<{provider: string, error: string}>}}
+   */
+  loadKeyedProviders() {
+    /** @type {string[]} */
+    const registered = [];
+    /** @type {any[]} */
+    const failed = [];
+
+    const stored = keys.providersWithKeys(this.db, this.principal.id);
+
+    for (const provider of BUILDABLE) {
+      const registryId = keyedIdFor(provider);
+      if (!stored.includes(provider)) {
+        this.registry.unregister(registryId);
+        continue;
+      }
+      try {
+        const key = keys.getKey(this.db, {
+          principalId: this.principal.id,
+          provider,
+          secret: this.keySecret,
+        });
+        if (!key) continue;
+        const built = providerFromKey(provider, key, {
+          ...(this.keyedProviderOptions[provider] ?? {}),
+          principalId: this.principal.id,
+        });
+        if (built) {
+          this.registry.register(built);
+          registered.push(built.id);
+        }
+      } catch (err) {
+        this.registry.unregister(registryId);
+        failed.push({ provider, error: err?.message ?? String(err) });
+      }
+    }
+
+    // A provider that was just added has no health history, and a stale "down"
+    // from before the key existed would keep it out of every routing decision.
+    if (registered.length) this.registry.resetHealth();
+
+    return { registered, failed };
+  }
+
+  /**
+   * Store an API key for the current principal.
+   *
+   * The key is sealed before it touches the database and is never returned
+   * again. What comes back is enough to recognise it and nothing more.
+   *
+   * @param {{provider: string, key: string, label?: string}} input
+   */
+  setApiKey(input) {
+    const result = keys.setKey(this.db, {
+      principalId: this.principal.id,
+      provider: input.provider,
+      key: input.key,
+      label: input.label,
+      secret: this.keySecret,
+    });
+
+    const load = this.loadKeyedProviders();
+    const failure = load.failed.find((f) => f.provider === input.provider);
+
+    events.emit(this.db, {
+      workspaceId: this.workspaceId,
+      type: events.EventType.CredentialChanged,
+      subjectKind: 'provider',
+      subjectId: input.provider,
+      actor: this.actor,
+      // The fingerprint, never the key. An audit log that leaks the thing it is
+      // auditing is worse than no audit log.
+      payload: {
+        action: result.replaced ? 'key-replaced' : 'key-added',
+        provider: input.provider,
+        fingerprint: result.fingerprint,
+      },
+    });
+
+    return {
+      ...result,
+      active: !failure && load.registered.includes(keyedIdFor(input.provider)),
+      error: failure?.error ?? null,
+    };
+  }
+
+  /** Keys this principal has stored, masked. */
+  apiKeys() {
+    return keys.list(this.db, this.principal.id, this.keySecret).map((k) => ({
+      ...k,
+      active: this.registry.get(keyedIdFor(k.provider)) !== undefined,
+    }));
+  }
+
+  /** @param {{provider?: string, id?: string}} q */
+  removeApiKey(q) {
+    const result = keys.removeKey(this.db, { principalId: this.principal.id, ...q });
+    this.loadKeyedProviders();
+
+    events.emit(this.db, {
+      workspaceId: this.workspaceId,
+      type: events.EventType.CredentialChanged,
+      subjectKind: 'provider',
+      subjectId: result.provider,
+      actor: this.actor,
+      payload: { action: 'key-removed', provider: result.provider },
+    });
+    return result;
   }
 
   /** @param {string} workspaceId */
