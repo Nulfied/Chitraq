@@ -114,6 +114,7 @@ The CLI talks to the engine directly, so it works with no server running.
 ```bash
 chitraq remember "Chose SQLite because it needs no server"
 chitraq ingest notes/architecture.md      # also .pdf, .html, .csv, .json
+chitraq ingest ~/Documents/notes          # or a whole folder
 chitraq search 'kind:decision sqlite after:2025-01'
 chitraq ask "why did we drop the redis cache"
 chitraq review                # proposals waiting for you
@@ -124,6 +125,41 @@ chitraq status                # what memory holds, what intelligence is availabl
 Search understands `kind:` `origin:` `after:` `before:` `during:` `is:confirmed`
 `tag:`, `"exact phrases"` and `-exclusions`, plus relative dates like
 `last week` and `3 months ago`.
+
+### Bringing in notes you already have
+
+Point Chitraq at a folder and it captures the documents, skips the machinery,
+and tells you what it passed over and why.
+
+```bash
+chitraq ingest ~/Documents/notes --dry-run     # what would be captured
+chitraq ingest ~/Documents/notes               # capture and read it
+chitraq ingest ~/Documents/notes --no-extract  # capture the text only, fast
+```
+
+By default it takes `md markdown mdx txt text rst org adoc html htm pdf` and
+leaves everything else, because a walk that swallows every `package.json` turns
+a memory into a haystack. `--include json,csv` widens it; `--only` replaces the
+list outright. `node_modules`, `.git`, `dist`, `.obsidian` and their kind are
+never descended into, dotfiles need `--hidden`, and symbolic links are never
+followed in either direction — one pointing at its own ancestor is a walk that
+never finishes.
+
+Two properties make a large import safe to just start:
+
+- **Each file commits before the next one begins.** Ctrl-C loses nothing.
+- **Capture is keyed on content and location.** Running it again skips what is
+  already in, so there is no such thing as a half-finished import — only one you
+  have not resumed.
+
+That matters because reading is the slow part. With a local model, extraction
+costs roughly twenty seconds a file; `--no-extract` stores the text in
+milliseconds and leaves the reading for later.
+
+Nothing from a folder enters memory on its own. Files become sources, sources
+become proposals, and proposals wait for `chitraq review`. An import that says
+"24 pieces of knowledge" means twenty-four things are waiting, not twenty-four
+things you now believe.
 
 ---
 

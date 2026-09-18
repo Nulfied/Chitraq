@@ -7,15 +7,17 @@
  * web app is a memory engine you will lose access to.
  */
 
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { basename } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { planFolder, skipSummary, DOCUMENT_EXTENSIONS } from '../capture/folder.js';
 import { Chitraq } from '../chitraq.js';
 import { loadConfig } from '../config.js';
 import { render } from '../context/builder.js';
 
 const COMMANDS = {
   remember: { args: '<text...>', help: 'Capture a note. Use --title, --kind, --body.' },
-  ingest: { args: '<file|->', help: 'Capture a document and propose what it contains.' },
+  ingest: { args: '<file|folder|->', help: 'Capture a document, or every document in a folder.' },
   search: { args: '<query...>', help: 'Search memory. Supports kind:, after:, "phrases", -exclude.' },
   ask: { args: '<question...>', help: 'Ask a question and get an answer grounded in memory.' },
   show: { args: '<id>', help: 'Everything about one object: history, links, evidence, provenance.' },
@@ -108,21 +110,41 @@ async function run(command, rest, flags, c) {
 
     case 'ingest': {
       const target = rest[0];
-      if (!target) throw new Error('Give a file path, or - to read standard input.');
+      if (!target) throw new Error('Give a file path, a folder, or - to read standard input.');
 
-      const text = target === '-' ? await readStdin() : await readFile(target, 'utf8');
-      const result = await c.ingest({
-        text,
-        filename: target === '-' ? 'stdin.txt' : basename(target),
-        uri: target === '-' ? undefined : `file://${target}`,
-        title: flags.title,
-      });
+      // One command for one file and for a folder of them. Which one you meant
+      // is a question the filesystem can answer, so it does.
+      const info = target === '-' ? null : await stat(target).catch(() => null);
+      if (info?.isDirectory()) {
+        await ingestFolder(target, flags, c);
+        break;
+      }
+      if (target !== '-' && !info) throw new Error(`There is nothing at ${target}.`);
+
+      const result = await c.ingest(
+        target === '-'
+          ? { text: await readStdin(), filename: 'stdin.txt', title: flags.title }
+          : {
+              // Bytes, not text: a PDF read as UTF-8 decodes into convincing
+              // rubbish, and the parser can only tell the difference if it is
+              // handed what is actually on disk.
+              bytes: await readFile(target),
+              filename: basename(target),
+              uri: pathToFileURL(target).href,
+              title: flags.title,
+            }
+      );
 
       if (result.deduplicated) {
         console.log(`\n  already captured — this is identical to ${result.source.id}\n`);
         break;
       }
       console.log(`\n  captured    ${result.source.id} (${result.parsed.mediaType})`);
+      if (result.parsed.needsCapability) {
+        console.log(`  no text     stored as-is; reading it needs ${result.parsed.needsCapability}`);
+        console.log('');
+        break;
+      }
       console.log(`  proposed    ${result.proposals.length} pieces of knowledge`);
       if (result.accepted.length) console.log(`  accepted    ${result.accepted.length} automatically by policy`);
       console.log(`\n  Nothing was written to memory yet. Review with: chitraq review\n`);
@@ -524,21 +546,146 @@ function usage(code = 0) {
     --db <path>     use a specific memory store
     --accept-all    accept every pending proposal (with 'review')
     --accept-above <n>  accept proposals at or above this confidence
-    --dry-run       for 'import': report what would happen, write nothing
+    --dry-run       for 'import' and folder 'ingest': write nothing, report what would happen
     --limit <n>     how many results
     --better        ask a model instead of quoting your own words
     --no-cache      skip the answer cache
     --why           show why each search result ranked where it did
     --context       show the context an answer was built from
 
+  Options for ingesting a folder
+    --no-extract    capture the text only; do not propose knowledge (much faster)
+    --include <a,b> also capture these extensions, e.g. --include json,csv
+    --only          treat --include as the complete list, not an addition
+    --no-recursive  only the folder itself
+    --hidden        include dotfiles and dot-folders
+    --max-mb <n>    skip files larger than this (default 10)
+
   Examples
     chitraq remember "Chose SQLite because it needs no server"
     chitraq ingest notes/architecture.md
+    chitraq ingest ~/Documents/notes --dry-run
+    chitraq ingest ~/Documents/notes --no-extract
     chitraq search "kind:decision sqlite after:2025-01"
     chitraq ask "why did we drop the redis cache"
     chitraq review
 `);
   process.exitCode = code;
+}
+
+
+/**
+ * Capture a folder, reporting as it goes.
+ *
+ * A bulk import is the one Chitraq operation that can run for an hour, so it is
+ * the one that most needs to say what it is doing. Every file prints a line,
+ * and the run can be stopped at any point without losing what it has already
+ * taken in.
+ *
+ * @param {string} target
+ * @param {Record<string, any>} flags
+ * @param {import('../chitraq.js').Chitraq} c
+ */
+async function ingestFolder(target, flags, c) {
+  /** @type {any} */
+  const opts = {
+    recursive: !flags['no-recursive'],
+    hidden: !!flags.hidden,
+    include: splitList(flags.include),
+    only: !!flags.only,
+    limit: flags.limit ? Number(flags.limit) : undefined,
+    maxBytes: flags['max-mb'] ? Number(flags['max-mb']) * 1024 * 1024 : undefined,
+    extract: !flags['no-extract'],
+  };
+
+  const plan = await planFolder(target, opts);
+  const skips = skipSummary(plan.skipped);
+
+  console.log(`\n  ${target}`);
+  console.log(`  ${plan.files.length} document(s) to capture across ${plan.directories} folder(s)`);
+  if (plan.limited) console.log(`  stopping at --limit ${opts.limit}`);
+  for (const [reason, n] of Object.entries(skips)) {
+    console.log(`  skipped     ${String(n).padStart(4)}  ${reason.replace(/-/g, ' ')}`);
+  }
+  if (skips['unsupported-type']) {
+    console.log(`  types captured by default: ${DOCUMENT_EXTENSIONS.join(', ')} — widen with --include`);
+  }
+
+  // Honest about an empty result too: a folder of .ts files reports why it
+  // found nothing rather than shrugging.
+  if (!plan.files.length) {
+    console.log(`\n  Nothing here to capture.\n`);
+    return;
+  }
+
+  if (flags['dry-run']) {
+    console.log('');
+    for (const f of plan.files) console.log(`    ${f.relative}`);
+    console.log(`\n  Dry run — nothing was written. Drop --dry-run to capture these.\n`);
+    return;
+  }
+
+  if (opts.extract) {
+    console.log(`\n  Each file is read and its contents proposed as knowledge. With a local`);
+    console.log(`  model this takes time; --no-extract captures the text only, and is fast.`);
+    console.log(`  Stopping with Ctrl-C is safe: finished files stay, and running this`);
+    console.log(`  again skips them.`);
+  }
+  console.log('');
+
+  const width = String(plan.files.length).length;
+  const result = await c.ingestFolder(target, {
+    ...opts,
+    plan,
+    onProgress: ({ index, total, file, outcome, detail }) => {
+      const mark = outcome === 'failed' ? '!' : outcome === 'already captured' ? '·' : '+';
+      const counter = `${String(index).padStart(width)}/${total}`;
+      console.log(`  ${mark} ${counter}  ${truncatePath(file.relative, 52).padEnd(52)} ${detail ?? outcome}`);
+    },
+  });
+
+  console.log(`\n  captured    ${result.captured.length} new`);
+  if (result.duplicates.length) console.log(`  unchanged   ${result.duplicates.length} already in memory`);
+  if (result.failures.length) {
+    console.log(`  failed      ${result.failures.length}`);
+    for (const f of result.failures.slice(0, 10)) console.log(`      ${f.file.relative}: ${f.error}`);
+    if (result.failures.length > 10) console.log(`      …and ${result.failures.length - 10} more`);
+  }
+  if (opts.extract) {
+    console.log(`  proposed    ${result.proposed} pieces of knowledge`);
+    if (result.accepted) console.log(`  accepted    ${result.accepted} automatically by policy`);
+  }
+  console.log(`  took        ${Math.round(result.elapsedMs / 1000)}s`);
+
+  console.log('');
+  const waiting = result.proposed - result.accepted;
+  if (waiting > 0) {
+    console.log(`  The text is stored, but none of it is searchable yet: ${waiting} proposal(s)`);
+    console.log(`  are waiting for you. Nothing enters memory until you say so.`);
+    console.log(`\n    chitraq review                       look at them`);
+    console.log(`    chitraq review --accept-above 0.7    take the confident ones`);
+  } else if (!opts.extract && result.captured.length) {
+    console.log(`  The text is stored verbatim, but --no-extract means nothing was read`);
+    console.log(`  out of it, so there is nothing to search yet. Run this again without`);
+    console.log(`  that flag when you want it turned into knowledge.`);
+  }
+  console.log('');
+}
+
+/** @param {any} v */
+function splitList(v) {
+  if (typeof v !== 'string') return undefined;
+  return v.split(',').map((x) => x.trim()).filter(Boolean);
+}
+
+/**
+ * Shorten a path from the left. The filename is the part worth reading, so it
+ * is the part that survives.
+ *
+ * @param {string} s @param {number} n
+ */
+function truncatePath(s, n) {
+  return s.length <= n ? s : `…${s.slice(-(n - 1))}`;
 }
 
 /** @param {string[]} argv */

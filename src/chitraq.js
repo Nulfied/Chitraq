@@ -16,6 +16,10 @@
  * or not a single model is reachable.
  */
 
+import { readFile } from 'node:fs/promises';
+import { basename } from 'node:path';
+import { pathToFileURL } from 'node:url';
+
 import { open, tx } from './core/db.js';
 import { now } from './core/ids.js';
 import * as objects from './core/objects.js';
@@ -41,6 +45,7 @@ import * as context from './context/builder.js';
 import * as proactive from './context/proactive.js';
 import * as answerCache from './context/answer-cache.js';
 import { parseSource } from './capture/parse.js';
+import { planFolder } from './capture/folder.js';
 import { estimateTokens } from './core/text.js';
 
 export { Capability } from './intelligence/registry.js';
@@ -272,6 +277,95 @@ export class Chitraq {
     }
 
     return { source, parsed, proposals, accepted, deduplicated: false };
+  }
+
+  /**
+   * Capture a whole folder.
+   *
+   * The properties that matter here are all about being interruptible. Each
+   * file is committed before the next one starts, so stopping halfway loses
+   * nothing; capture is keyed on content and location, so running it again
+   * skips everything already taken in. Together those mean the honest advice
+   * for a large folder is "start it, and press Ctrl-C whenever you like" —
+   * which is the only advice that is any use when extraction with a local
+   * model costs twenty seconds a file.
+   *
+   * Errors are collected rather than thrown. One unreadable file in four
+   * hundred should cost you that file, not the run.
+   *
+   * @param {string} root
+   * @param {object} [opts]
+   * @param {boolean} [opts.recursive]
+   * @param {boolean} [opts.hidden]
+   * @param {string[]} [opts.include]
+   * @param {boolean} [opts.only]
+   * @param {number} [opts.maxBytes]
+   * @param {number} [opts.limit]
+   * @param {boolean} [opts.extract]    propose claims per file, default true
+   * @param {boolean} [opts.keepBlob]
+   * @param {any} [opts.plan]           a plan from planFolder, to capture exactly what was shown
+   * @param {(p: {index: number, total: number, file: any, outcome: string, detail?: string}) => void} [opts.onProgress]
+   * @returns {Promise<{plan: any, captured: any[], duplicates: any[], failures: any[], proposed: number, accepted: number, elapsedMs: number}>}
+   */
+  async ingestFolder(root, opts = {}) {
+    // A caller that has already planned — to print the list, or to let someone
+    // approve it — passes it back in. Walking twice would mean the folder could
+    // change in between, and then what was shown is not what was captured.
+    const plan = opts.plan ?? (await planFolder(root, opts));
+    const started = Date.now();
+
+    /** @type {any[]} */ const captured = [];
+    /** @type {any[]} */ const duplicates = [];
+    /** @type {any[]} */ const failures = [];
+    let proposed = 0;
+    let accepted = 0;
+
+    for (const [i, file] of plan.files.entries()) {
+      /** @type {string} */ let outcome;
+      /** @type {string|undefined} */ let detail;
+      try {
+        // Read as bytes, not as text. A PDF decoded as UTF-8 is convincing
+        // rubbish, and rubbish that looks like text is worse than a failure.
+        const bytes = await readFile(file.path);
+        const result = await this.ingest({
+          bytes,
+          filename: basename(file.path),
+          uri: pathToFileURL(file.path).href,
+          extract: opts.extract,
+          keepBlob: opts.keepBlob,
+        });
+
+        if (result.deduplicated) {
+          duplicates.push({ file, sourceId: result.source.id });
+          outcome = 'already captured';
+        } else {
+          captured.push({ file, sourceId: result.source.id, proposals: result.proposals.length });
+          proposed += result.proposals.length;
+          accepted += result.accepted.length;
+          outcome = 'captured';
+          detail = result.parsed.needsCapability
+            ? `no text — needs ${result.parsed.needsCapability}`
+            : opts.extract === false
+              ? `${words(result.parsed.text)} words`
+              : `${result.proposals.length} proposed`;
+        }
+      } catch (err) {
+        failures.push({ file, error: err?.message ?? String(err) });
+        outcome = 'failed';
+        detail = err?.message ?? String(err);
+      }
+      opts.onProgress?.({ index: i + 1, total: plan.files.length, file, outcome, detail });
+    }
+
+    return {
+      plan,
+      captured,
+      duplicates,
+      failures,
+      proposed,
+      accepted,
+      elapsedMs: Date.now() - started,
+    };
   }
 
   // ============================================================ RETRIEVAL
@@ -1610,6 +1704,16 @@ function round4(n) {
 }
 
 /** @param {string} text */
+/**
+ * Roughly how much text a file yielded. Shown when extraction is off, where
+ * "0 proposed" would otherwise read like the file was empty.
+ *
+ * @param {string} text
+ */
+function words(text) {
+  return (text.match(/\S+/g) ?? []).length;
+}
+
 function truncateTitle(text) {
   const oneLine = text.replace(/\s+/g, ' ').trim();
   return oneLine.length <= 120 ? oneLine : `${oneLine.slice(0, 117)}…`;

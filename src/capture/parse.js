@@ -285,6 +285,7 @@ export function guessMediaType(nameOrUri) {
     json: 'application/json',
     csv: 'text/csv', tsv: 'text/csv',
     txt: 'text/plain', log: 'text/plain', text: 'text/plain',
+    rst: 'text/plain', org: 'text/plain', adoc: 'text/plain',
     pdf: 'application/pdf',
     png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
     webp: 'image/webp', heic: 'image/heic', tiff: 'image/tiff',

@@ -5,7 +5,7 @@ What is actually built, what is partial, and what is deliberately not built.
 States: **IMPLEMENTED** (built and tested), **PARTIAL** (works, with a stated
 limit), **NOT BUILT** (deliberately deferred).
 
-Last updated: 2026-09-18. 199 tests passing.
+Last updated: 2026-09-18. 211 tests passing.
 
 ---
 
@@ -175,6 +175,7 @@ reported on the Status screen; not automatic.
 | Format | State | Notes |
 |---|---|---|
 | Text, Markdown, HTML, JSON, CSV | IMPLEMENTED | Front matter, headings, links, wikilinks |
+| **Folder capture** | IMPLEMENTED | Resumable, idempotent, skips machinery, states a reason for every omission |
 | **PDF** | IMPLEMENTED | Dependency-free: inflates content streams, reads text operators, extracts document info |
 | Scanned PDF | PARTIAL | Detected and reported honestly; names `ocr.document` as what would read it |
 | Encrypted PDF | PARTIAL | Detected and reported; file still captured verbatim |
@@ -183,6 +184,37 @@ reported on the Status screen; not automatic.
 
 The partials are honest ones: the bytes are always stored, and the capability
 that would unlock them is named rather than silently doing nothing.
+
+### Folder capture
+
+`chitraq ingest <folder>` walks a notes folder and captures the documents in it.
+The design is shaped by one fact: reading is slow. Extraction with a local model
+costs about twenty seconds a file, so a four-hundred-file folder is a two-hour
+job, and a two-hour job that cannot be interrupted is a job nobody starts.
+
+So each file commits before the next begins, and capture is keyed on content and
+location, which together mean Ctrl-C is safe and re-running resumes. `--dry-run`
+prints the list first; `--no-extract` stores the text in milliseconds and leaves
+the reading for later.
+
+The default extension list is documents, not data — `json`, `csv`, `log` and
+source files are parseable but excluded, because a walk that swallows every
+`package.json` turns a memory into a haystack. Machinery directories are never
+descended into and symbolic links are never followed, in either direction.
+
+Every omission carries a reason (`ignored-directory`, `hidden`, `symbolic-link`,
+`unsupported-type`, `too-large`, `empty`, `unreadable`), summarised by count, so
+"where is my note?" is answerable without reading the source.
+
+**Known limit — no change detection.** An edited file is captured again as a new
+source rather than recognised as a revision of the old one. Identical claims
+deduplicate at the object level, so this does not produce visible duplicates,
+but it does mean re-reading files that have not changed. Storing path, size and
+mtime would fix it; that state has not earned its place yet.
+
+**Not exposed over HTTP.** The route would have to either stream progress or
+block for an hour, and a bulk import belongs on the command line until real use
+says otherwise.
 
 ## Interfaces — IMPLEMENTED
 
@@ -220,5 +252,7 @@ that would unlock them is named rather than silently doing nothing.
    process. A multi-user server needs work not yet done.
 5. **Sync has no transport.** `changesSince` produces a payload and
    `applyChanges` consumes one; moving it between machines is left to the caller.
+   Folder capture has no watch mode either: it is a command you run, not a
+   daemon that notices.
 6. **Entity resolution only handles people, organisations and identifiers.**
    Places, products and concepts are extracted as attributes, not resolved.
