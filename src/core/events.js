@@ -29,6 +29,8 @@ export const EventType = Object.freeze({
   ProposalRejected: 'ProposalRejected',
   ProposalInvalidated: 'ProposalInvalidated',
   CapabilityRun: 'CapabilityRun',
+  ProviderUnavailable: 'ProviderUnavailable',
+  ProviderRestored: 'ProviderRestored',
   ConflictDetected: 'ConflictDetected',
   ConflictResolved: 'ConflictResolved',
   QueryAsked: 'QueryAsked',

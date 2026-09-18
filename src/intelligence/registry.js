@@ -37,6 +37,18 @@ export const Capability = Object.freeze({
   ClassifyKind: 'classify.kind',
   /** query + candidates -> reordered candidates. */
   Rerank: 'rerank',
+
+  // Slots for content Chitraq can capture but not yet read. Declared here so
+  // the registry can report honestly that nothing serves them, and so adding a
+  // provider later needs no change anywhere else.
+  /** image bytes -> text. */
+  OcrImage: 'ocr.image',
+  /** document bytes (scanned PDF) -> text. */
+  OcrDocument: 'ocr.document',
+  /** audio bytes -> transcript. */
+  Transcribe: 'speech.transcribe',
+  /** image bytes + question -> description. */
+  DescribeImage: 'vision.describe',
 });
 
 /**
@@ -64,8 +76,26 @@ export class Registry {
     this.providers = new Map();
     /** @type {Map<string, {ok: boolean, checkedAt: number}>} */
     this.healthCache = new Map();
+    /**
+     * Last known state per provider, kept separately from the TTL cache.
+     *
+     * `resetHealth()` clears the cache to force a re-probe, which would also
+     * erase the memory of what the state *was* — and a transition you cannot
+     * see is a transition you cannot report.
+     * @type {Map<string, boolean>}
+     */
+    this.lastKnownHealth = new Map();
     /** Health results are cached briefly so routing does not probe on every call. */
     this.healthTtlMs = 30_000;
+    /**
+     * Called when a provider changes between reachable and not.
+     *
+     * A provider that fails its health check is dropped from routing before it
+     * is ever called, so nothing lands in the run log — which would leave an
+     * outage completely invisible. This is how it gets recorded.
+     * @type {((change: {providerId: string, ok: boolean, at: string}) => void)|null}
+     */
+    this.onHealthChange = null;
   }
 
   /**
@@ -90,6 +120,7 @@ export class Registry {
   unregister(providerId) {
     this.providers.delete(providerId);
     this.healthCache.delete(providerId);
+    this.lastKnownHealth.delete(providerId);
   }
 
   /**
@@ -131,11 +162,25 @@ export class Registry {
     } catch {
       ok = false;
     }
+
+    const previous = this.lastKnownHealth.get(provider.id);
     this.healthCache.set(provider.id, { ok, checkedAt: Date.now() });
+    this.lastKnownHealth.set(provider.id, ok);
+
+    if (previous !== undefined && previous !== ok) {
+      try {
+        this.onHealthChange?.({ providerId: provider.id, ok, at: new Date().toISOString() });
+      } catch {
+        // Reporting a health change must never break routing.
+      }
+    }
     return ok;
   }
 
-  /** Forget cached health, so the next route re-probes. */
+  /**
+   * Forget cached health, so the next route re-probes.
+   * Last-known state is deliberately kept, so a change is still noticed.
+   */
   resetHealth() {
     this.healthCache.clear();
   }

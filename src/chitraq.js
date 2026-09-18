@@ -21,6 +21,8 @@ import { now } from './core/ids.js';
 import * as objects from './core/objects.js';
 import * as entities from './core/entities.js';
 import * as transfer from './core/transfer.js';
+import * as auth from './core/auth.js';
+import * as sync from './core/sync.js';
 import * as relations from './core/relations.js';
 import * as sources from './core/sources.js';
 import * as workspaceStore from './core/workspace.js';
@@ -71,6 +73,19 @@ export class Chitraq {
     const boot = workspaceStore.bootstrap(this.db);
     this.workspaceId = boot.workspace.id;
     this.router.workspaceId = boot.workspace.id;
+
+    // A provider going down is a fact about this installation worth keeping:
+    // it explains why answers got worse on a particular afternoon.
+    this.registry.onHealthChange = ({ providerId, ok }) => {
+      events.emit(this.db, {
+        workspaceId: this.workspaceId,
+        type: ok ? events.EventType.ProviderRestored : events.EventType.ProviderUnavailable,
+        subjectKind: 'provider',
+        subjectId: providerId,
+        actor: { id: providerId, kind: 'capability' },
+        payload: { provider: providerId, available: ok },
+      });
+    };
     this.principal = boot.principal;
     this.actor = { id: boot.principal.id, kind: /** @type {const} */ ('user') };
   }
@@ -1001,6 +1016,130 @@ export class Chitraq {
     return budget.check(this.db, this.workspaceId, this.router.policy.budget ?? {}, costMicros);
   }
 
+
+  // ================================================================ AUTH
+
+  /**
+   * Authentication is off until an account exists. A local single-user install
+   * never needs one; a shared or remote-reachable one does.
+   */
+  get authEnabled() {
+    return auth.isEnabled(this.db);
+  }
+
+  /**
+   * Give a principal a username and password. With no principalId, this
+   * secures the owner of the current workspace.
+   * @param {{username: string, password: string, principalId?: string}} input
+   */
+  createAccount(input) {
+    return auth.setPassword(this.db, {
+      principalId: input.principalId ?? this.principal.id,
+      username: input.username,
+      password: input.password,
+    });
+  }
+
+  /** @param {{username: string, password: string, userAgent?: string}} input */
+  login(input) {
+    return auth.login(this.db, input);
+  }
+
+  /** @param {string} token */
+  logout(token) {
+    return auth.logout(this.db, token);
+  }
+
+  /** @param {string|null|undefined} token */
+  authenticate(token) {
+    return auth.authenticate(this.db, token);
+  }
+
+  /** @param {string} [principalId] */
+  sessions(principalId) {
+    return auth.sessions(this.db, principalId ?? this.principal.id);
+  }
+
+  accounts() {
+    return auth.accounts(this.db);
+  }
+
+  // ================================================================ SYNC
+
+  /**
+   * Everything that changed since a peer last pulled, ready to hand over.
+   * @param {{since?: string|null, peerId?: string, limit?: number}} [opts]
+   */
+  changesSince(opts = {}) {
+    const since =
+      opts.since !== undefined
+        ? opts.since
+        : opts.peerId
+          ? sync.cursorFor(this.db, {
+              workspaceId: this.workspaceId,
+              peerId: opts.peerId,
+              direction: 'push',
+            })
+          : null;
+
+    const payload = sync.changesSince(this.db, {
+      workspaceId: this.workspaceId,
+      since,
+      limit: opts.limit,
+    });
+    if (opts.peerId) {
+      sync.recordPush(this.db, {
+        workspaceId: this.workspaceId,
+        peerId: opts.peerId,
+        cursor: payload.cursor,
+      });
+    }
+    return payload;
+  }
+
+  /**
+   * Merge a peer's changes.
+   *
+   * Where both sides edited the same object independently, local state is kept
+   * and a conflict is raised — last-writer-wins would destroy one of the two
+   * edits with nobody the wiser.
+   *
+   * @param {any} payload
+   * @param {{peerId?: string, dryRun?: boolean, reindex?: boolean}} [opts]
+   */
+  async applyChanges(payload, opts = {}) {
+    const result = sync.apply(this.db, payload, {
+      workspaceId: this.workspaceId,
+      peerId: opts.peerId,
+      dryRun: opts.dryRun,
+      actor: this.actor,
+    });
+
+    if (!opts.dryRun && opts.reindex !== false) {
+      const changed = (result.applied.objects ?? 0) + (result.applied.versions ?? 0);
+      if (changed > 0) await this.reindex();
+    }
+    return result;
+  }
+
+  /**
+   * Exchange changes with a peer in one call, given a transport function.
+   * @param {object} opts
+   * @param {string} opts.peerId
+   * @param {(payload: any) => Promise<any>} opts.exchange  send ours, get theirs
+   */
+  async syncWith(opts) {
+    const outgoing = this.changesSince({ peerId: opts.peerId });
+    const incoming = await opts.exchange(outgoing);
+    const result = incoming ? await this.applyChanges(incoming, { peerId: opts.peerId }) : null;
+    return { sent: outgoing.objects.length + outgoing.relations.length, received: result };
+  }
+
+  /** Peers this workspace has exchanged changes with. */
+  peers() {
+    return sync.peers(this.db, this.workspaceId);
+  }
+
   // ============================================================ internals
 
   /**
@@ -1193,5 +1332,5 @@ function truncateTitle(text) {
 
 export {
   DEFAULT_POLICY, estimateTokens, gateway, objects, relations, sources,
-  events, indexer, context, entities, transfer, proactive, budget, ann, salience,
+  events, indexer, context, entities, transfer, proactive, budget, ann, salience, auth, sync,
 };

@@ -1,3 +1,5 @@
+import { extractPdfText } from './pdf.js';
+
 /**
  * Source parsers: raw bytes or text in, plain text plus structure out.
  *
@@ -13,6 +15,7 @@
  * @property {string|null} title    detected title, if any
  * @property {object} meta          structure found along the way
  * @property {string} mediaType
+ * @property {string|null} [needsCapability] a capability that would unlock this content
  */
 
 /**
@@ -26,6 +29,43 @@
  */
 export function parseSource(input) {
   const mediaType = input.mediaType ?? guessMediaType(input.filename ?? input.uri ?? '') ?? 'text/plain';
+
+  // Binary formats are handled before the text decode: running a PDF or an
+  // image through TextDecoder produces plausible-looking rubbish, and rubbish
+  // that looks like text is worse than an honest failure.
+  if (input.bytes?.length) {
+    if (mediaType === 'application/pdf' || looksLikePdf(input.bytes)) {
+      const pdf = extractPdfText(input.bytes);
+      return {
+        text: pdf.text,
+        title: pdf.meta.title ?? null,
+        meta: { ...pdf.meta, pages: pdf.pages, extracted: pdf.extracted, reason: pdf.reason },
+        mediaType: 'application/pdf',
+        needsCapability: pdf.extracted ? null : 'ocr.document',
+      };
+    }
+    if (mediaType.startsWith('image/')) {
+      // Nothing to read without a vision or OCR provider. The bytes are still
+      // captured; the capability slot says what would unlock them.
+      return {
+        text: '',
+        title: input.filename ?? null,
+        meta: { bytes: input.bytes.length, reason: 'Images need a vision or OCR capability to read.' },
+        mediaType,
+        needsCapability: 'ocr.image',
+      };
+    }
+    if (mediaType.startsWith('audio/') || mediaType.startsWith('video/')) {
+      return {
+        text: '',
+        title: input.filename ?? null,
+        meta: { bytes: input.bytes.length, reason: 'Audio needs a speech-to-text capability to read.' },
+        mediaType,
+        needsCapability: 'speech.transcribe',
+      };
+    }
+  }
+
   const raw = input.text ?? decode(input.bytes);
 
   switch (mediaType) {
@@ -222,6 +262,14 @@ function firstLineTitle(text) {
   return trimmed.length > 120 ? `${trimmed.slice(0, 117)}…` : trimmed;
 }
 
+/** @param {Uint8Array} bytes */
+function looksLikePdf(bytes) {
+  return (
+    bytes.length > 5 &&
+    bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46
+  );
+}
+
 /** @param {Uint8Array|undefined} bytes */
 function decode(bytes) {
   if (!bytes) return '';
@@ -237,5 +285,10 @@ export function guessMediaType(nameOrUri) {
     json: 'application/json',
     csv: 'text/csv', tsv: 'text/csv',
     txt: 'text/plain', log: 'text/plain', text: 'text/plain',
+    pdf: 'application/pdf',
+    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+    webp: 'image/webp', heic: 'image/heic', tiff: 'image/tiff',
+    mp3: 'audio/mpeg', wav: 'audio/wav', m4a: 'audio/mp4', ogg: 'audio/ogg',
+    mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm',
   }[ext ?? ''] ?? null;
 }

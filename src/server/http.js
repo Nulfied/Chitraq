@@ -17,6 +17,20 @@ import { fileURLToPath } from 'node:url';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const WEB_ROOT = resolve(HERE, '../../web');
 
+/** Routes reachable without a session, so signing in is possible. */
+const PUBLIC_ROUTES = new Set(['/api/health', '/api/auth/status', '/api/auth/login']);
+
+/**
+ * Read a bearer token from the Authorization header, or the session cookie.
+ * @param {import('node:http').IncomingMessage} req
+ */
+function bearer(req) {
+  const header = String(req.headers.authorization ?? '');
+  if (header.toLowerCase().startsWith('bearer ')) return header.slice(7).trim();
+  const cookie = /(?:^|;\s*)chitraq_session=([^;]+)/.exec(String(req.headers.cookie ?? ''));
+  return cookie ? decodeURIComponent(cookie[1]) : null;
+}
+
 /**
  * @param {import('../chitraq.js').Chitraq} chitraq
  * @param {{webRoot?: string}} [opts]
@@ -166,6 +180,100 @@ export function createApp(chitraq, opts = {}) {
     chitraq.resolveConflict(params.id, body.status ?? 'resolved', body.resolution)
   );
 
+
+  // ---------------------------------------------------------- entities
+
+  route('GET', '/api/entities', ({ query }) =>
+    chitraq.entities({ entityType: query.type, limit: num(query.limit, 100) })
+  );
+
+  route('GET', '/api/entities/:id', ({ params }) => {
+    const found = chitraq.entity(params.id);
+    if (!found) throw notFound(`No entity ${params.id}`);
+    return found;
+  });
+
+  route('GET', '/api/entities-duplicates', ({ query }) =>
+    chitraq.duplicateEntities({ minScore: Number(query.minScore) || undefined })
+  );
+
+  route('POST', '/api/entities/:id/merge', ({ params, body }) =>
+    chitraq.mergeEntities(params.id, body.mergeId, body.reason)
+  );
+
+  route('POST', '/api/entities/:id/alias', ({ params, body }) =>
+    chitraq.addAlias(params.id, body.alias)
+  );
+
+  // ------------------------------------------------------ bulk review
+
+  route('POST', '/api/proposals/bulk', ({ body }) => chitraq.reviewAll(body));
+
+  route('POST', '/api/proposals/expire', ({ body }) =>
+    chitraq.expireProposals({ olderThanDays: body?.olderThanDays })
+  );
+
+  // -------------------------------------------------------- proactive
+
+  route('GET', '/api/notices', () => chitraq.notices());
+
+  route('GET', '/api/objects/:id/notices', ({ params }) => chitraq.noticesFor(params.id));
+
+  // ----------------------------------------------------------- budget
+
+  route('GET', '/api/costs', ({ query }) => chitraq.costs({ since: query.since }));
+
+  route('POST', '/api/budget', ({ body }) => chitraq.setBudget(body));
+
+  // ------------------------------------------------ transfer and sync
+
+  route('POST', '/api/import', ({ body }) =>
+    chitraq.import(body.payload ?? body, {
+      onConflict: body.onConflict,
+      dryRun: body.dryRun,
+    })
+  );
+
+  route('GET', '/api/sync/changes', ({ query }) =>
+    chitraq.changesSince({ since: query.since ?? undefined, peerId: query.peer })
+  );
+
+  route('POST', '/api/sync/apply', ({ body }) =>
+    chitraq.applyChanges(body.payload ?? body, { peerId: body.peerId, dryRun: body.dryRun })
+  );
+
+  route('GET', '/api/sync/peers', () => chitraq.peers());
+
+  // ------------------------------------------------- vector index ops
+
+  route('POST', '/api/vector-index/build', ({ body }) => chitraq.buildVectorIndex(body ?? {}));
+
+  route('POST', '/api/vector-index/benchmark', ({ body }) =>
+    chitraq.benchmarkVectorIndex(body ?? {})
+  );
+
+  // ------------------------------------------------------------- auth
+
+  route('GET', '/api/auth/status', () => ({
+    enabled: chitraq.authEnabled,
+    accounts: chitraq.authEnabled ? chitraq.accounts().length : 0,
+  }));
+
+  route('POST', '/api/auth/login', ({ body, req }) => {
+    const session = chitraq.login({
+      username: body.username,
+      password: body.password,
+      userAgent: req.headers['user-agent'],
+    });
+    return session;
+  });
+
+  route('POST', '/api/auth/logout', ({ body, req }) =>
+    chitraq.logout(body?.token ?? bearer(req))
+  );
+
+  route('GET', '/api/auth/sessions', () => chitraq.sessions());
+
   // ------------------------------------------------------------ handler
 
   const server = createServer(async (req, res) => {
@@ -187,6 +295,16 @@ export function createApp(chitraq, opts = {}) {
           (r) => r.method === req.method && r.pattern.test(url.pathname)
         );
         if (!match) return send(res, 404, { error: `No route ${req.method} ${url.pathname}` });
+
+        // Authentication is enforced only once an account exists. A local
+        // single-user install is reached over loopback and needs no login;
+        // the moment someone creates an account, every route needs one.
+        if (chitraq.authEnabled && !PUBLIC_ROUTES.has(url.pathname)) {
+          const principal = chitraq.authenticate(bearer(req));
+          if (!principal) {
+            return send(res, 401, { error: 'Sign in to reach this memory.', kind: 'Unauthorized' });
+          }
+        }
 
         const params = match.pattern.exec(url.pathname)?.groups ?? {};
         const query = Object.fromEntries(url.searchParams);
