@@ -16,7 +16,7 @@
  * or not a single model is reachable.
  */
 
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -51,6 +51,7 @@ import * as proactive from './context/proactive.js';
 import * as answerCache from './context/answer-cache.js';
 import { parseSource } from './capture/parse.js';
 import { planFolder } from './capture/folder.js';
+import { watchFolder, displayPath, resolveReal } from './capture/watch.js';
 import { estimateTokens } from './core/text.js';
 
 export { Capability } from './intelligence/registry.js';
@@ -624,6 +625,60 @@ export class Chitraq {
       accepted,
       elapsedMs: Date.now() - started,
     };
+  }
+
+  /**
+   * Watch a folder and capture what changes in it, until told to stop.
+   *
+   * A foreground watcher, not a daemon. It exists for as long as the caller
+   * keeps it, prints what it takes in, and dies with the process. Nothing is
+   * installed and nothing survives.
+   *
+   * @param {string} root
+   * @param {object} [opts]  as ingestFolder, plus onEvent and settleMs
+   * @returns {import('./capture/watch.js').Watcher}
+   */
+  watch(root, opts = {}) {
+    // The same spelling the watcher will use, so display paths come out
+    // relative to the folder rather than relative to a different name for it.
+    const resolved = resolveReal(root);
+
+    return watchFolder({
+      root: resolved,
+      recursive: opts.recursive,
+      include: opts.include,
+      only: opts.only,
+      settleMs: opts.settleMs,
+      onEvent: opts.onEvent,
+      capture: async (paths) => {
+        // A plan built from exactly the settled paths, so the watcher captures
+        // what changed rather than re-walking the folder each time. The
+        // unchanged-file check still applies underneath, which is what makes an
+        // editor touching a file without altering it cost nothing.
+        const files = [];
+        for (const path of paths) {
+          const info = await stat(path).catch(() => null);
+          if (!info?.isFile()) continue;
+          files.push({
+            path,
+            // relative(), not slice arithmetic. The watcher resolves its root to
+            // the real path, which on Windows is a different length from the one
+            // the caller passed, and subtracting the wrong number of characters
+            // silently eats the front of every filename.
+            relative: displayPath(resolved, path),
+            bytes: info.size,
+            modified: info.mtime.toISOString(),
+            mediaType: 'text/plain',
+          });
+        }
+        if (!files.length) return { captured: [], unchanged: [], duplicates: [], failures: [] };
+
+        return this.ingestFolder(resolved, {
+          ...opts,
+          plan: { root: resolved, files, skipped: [], directories: 1, limited: false },
+        });
+      },
+    });
   }
 
   /**

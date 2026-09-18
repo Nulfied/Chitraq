@@ -35,6 +35,7 @@ const COMMANDS = {
   entities: { args: '', help: 'People, places, products and projects found in your notes.' },
   merge: { args: '<keepId> <mergeId>', help: 'Merge two entities into one.' },
   concepts: { args: '', help: 'Ideas that recur across your notes. --propose to suggest them.' },
+  watch: { args: '<folder>', help: 'Capture changes to a folder as they happen. Ctrl-C to stop.' },
   notices: { args: '', help: 'Things worth knowing without asking.' },
   costs: { args: '', help: 'What intelligence has cost, by provider and capability.' },
   import: { args: '<file>', help: 'Import a Chitraq export into this memory.' },
@@ -301,6 +302,65 @@ async function run(command, rest, flags, c) {
         console.log(`    ${dim(`${concept.documents} notes \u00b7 ${concept.occurrences} mentions \u00b7 confidence ${concept.confidence}`)}`);
       }
       console.log(`\n  Suggest these as entities with: chitraq concepts --propose\n`);
+      break;
+    }
+
+    case 'watch': {
+      const target = rest[0];
+      if (!target) throw new Error('Give a folder to watch.');
+
+      const info = await stat(target).catch(() => null);
+      if (!info?.isDirectory()) throw new Error(`${target} is not a folder.`);
+
+      const opts = {
+        recursive: !flags['no-recursive'],
+        include: splitList(flags.include),
+        only: !!flags.only,
+        extract: !flags['no-extract'],
+      };
+
+      // Catch up first. A watcher that only notices changes made while it was
+      // running leaves a gap nobody can see, and "why is yesterday's note
+      // missing" is not a question a memory engine should provoke.
+      const initial = await c.ingestFolder(target, opts);
+      console.log(`\n  watching    ${target}`);
+      if (initial.captured.length) console.log(`  caught up   ${initial.captured.length} new file(s)`);
+      console.log(`  ${dim('This runs in the foreground and stops with Ctrl-C. Nothing is installed.')}`);
+      if (opts.extract) {
+        console.log(`  ${dim('Each change is read for knowledge, which takes time with a local model.')}`);
+      }
+      console.log('');
+
+      const watcher = c.watch(target, {
+        ...opts,
+        onEvent: (event) => {
+          if (event.type === 'failed') {
+            console.log(`  ! ${event.paths.join(', ')}  ${event.error}`);
+            return;
+          }
+          if (event.type === 'error') {
+            console.log(`  ! watch error: ${event.error}`);
+            return;
+          }
+          for (const item of event.result?.captured ?? []) {
+            console.log(`  + ${stamp()}  ${item.file.relative}`);
+          }
+          for (const item of event.result?.unchanged ?? []) {
+            console.log(`  \u00b7 ${stamp()}  ${item.file.relative}  ${dim('unchanged')}`);
+          }
+        },
+      });
+
+      await new Promise((resolve) => {
+        process.on('SIGINT', () => {
+          console.log(`\n\n  stopping\u2026 (${watcher.state().queued} still queued)`);
+          watcher.stop();
+          watcher.done.then(resolve);
+        });
+      });
+
+      const final = watcher.state();
+      console.log(`  captured    ${final.captured} file(s) while watching\n`);
       break;
     }
 
@@ -851,6 +911,11 @@ function describeCounts(counts) {
     .filter(([, n]) => n > 0)
     .map(([k, n]) => `${n} ${k}`);
   return parts.length ? parts.join(', ') : 'nothing';
+}
+
+/** Wall-clock time, so a long watch reads as a log rather than a wall. */
+function stamp() {
+  return new Date().toTimeString().slice(0, 8);
 }
 
 /** @param {any} v */
