@@ -22,6 +22,8 @@ import { excerpt, contentTerms } from '../core/text.js';
 import { decodeVector } from './indexer.js';
 import { traverse } from '../core/relations.js';
 import { parse, toFtsQuery } from './query.js';
+import { multiplier as salienceMultiplier } from './salience.js';
+import { search as annSearch } from './ann.js';
 
 /** RRF damping constant. 60 is the value from the original TREC work. */
 const RRF_K = 60;
@@ -55,6 +57,8 @@ const RRF_K = 60;
  * @param {string} [opts.anchorId]              boost things near this object
  * @param {boolean} [opts.includeArchived]
  * @param {number} [opts.recencyHalfLifeDays]   0 disables recency preference
+ * @param {boolean} [opts.useSalience]          default true
+ * @param {any} [opts.annIndex]                 an IVF index, when one is warranted
  * @returns {{results: SearchResult[], intent: any, signals: string[], total: number}}
  */
 export function search(db, opts) {
@@ -68,15 +72,20 @@ export function search(db, opts) {
   const lexical = lexicalSearch(db, intent, opts.workspaceId, pool);
   if (lexical.length) signals.push('lexical');
 
+  // The approximate index is used only when one has been built for this
+  // workspace, which only happens above the size where it is measurably
+  // faster. Everything below that goes to the exact scan.
   const semantic = opts.queryVector
-    ? vectorSearch(db, {
-        workspaceId: opts.workspaceId,
-        vector: opts.queryVector,
-        model: opts.vectorModel ?? 'unknown',
-        limit: pool,
-      })
+    ? opts.annIndex
+      ? annSearch(opts.annIndex, { vector: opts.queryVector, limit: pool })
+      : vectorSearch(db, {
+          workspaceId: opts.workspaceId,
+          vector: opts.queryVector,
+          model: opts.vectorModel ?? 'unknown',
+          limit: pool,
+        })
     : [];
-  if (semantic.length) signals.push('semantic');
+  if (semantic.length) signals.push(opts.annIndex ? 'semantic~' : 'semantic');
 
   const structural = opts.anchorId ? structuralNeighbours(db, opts.anchorId) : new Map();
   if (structural.size) signals.push('structural');
@@ -109,7 +118,12 @@ export function search(db, opts) {
   const objectRows = new Map(
     plainAll(
       db
-        .prepare(`SELECT * FROM object WHERE id IN (${ids.map(() => '?').join(',')})`)
+        .prepare(
+          `SELECT o.*,
+                  (SELECT COUNT(*) FROM relation r
+                   WHERE (r.src_id = o.id OR r.dst_id = o.id) AND r.state = 'active') AS degree
+           FROM object o WHERE o.id IN (${ids.map(() => '?').join(',')})`
+        )
         .all(...ids)
     ).map((r) => [r.id, r])
   );
@@ -153,6 +167,23 @@ export function search(db, opts) {
       const factor = 0.85 + 0.15 * recency;
       why.recency = { ageDays: Math.round(ageDays), multiplier: round(factor) };
       score *= factor;
+    }
+
+    if (opts.useSalience !== false) {
+      const s = salienceMultiplier(
+        {
+          access_count: obj.access_count,
+          last_access: obj.last_access,
+          degree: obj.degree,
+          evidence: evidenceCounts.get(objectId) ?? 0,
+          review: obj.review,
+        },
+        { now }
+      );
+      // Bounded to ±15% so prominence breaks ties without ever outweighing
+      // relevance — see the note in salience.js.
+      why.salience = { value: s.value, multiplier: round(s.multiplier), because: s.because };
+      score *= s.multiplier;
     }
 
     const snippetSource = entry.best.lexical?.text ?? entry.best.semantic?.text ?? obj.body ?? obj.title;

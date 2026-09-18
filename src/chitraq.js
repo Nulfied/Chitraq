@@ -30,6 +30,8 @@ import { Router, DEFAULT_POLICY, runHistory } from './intelligence/router.js';
 import { deterministicProvider, EMBED_MODEL } from './intelligence/providers/deterministic.js';
 import * as gateway from './intelligence/gateway.js';
 import * as indexer from './retrieval/indexer.js';
+import * as ann from './retrieval/ann.js';
+import * as salience from './retrieval/salience.js';
 import { search as runSearch, similarTo } from './retrieval/search.js';
 import { parse as parseQuery } from './retrieval/query.js';
 import * as context from './context/builder.js';
@@ -42,6 +44,9 @@ export { RelType } from './core/relations.js';
 export { Op } from './intelligence/gateway.js';
 
 export class Chitraq {
+  /** @type {Map<string, {index: any, size: number}>} */
+  #annCache = new Map();
+
   /**
    * @param {object} [opts]
    * @param {string} [opts.path]        store location; ':memory:' for ephemeral
@@ -271,15 +276,23 @@ export class Chitraq {
       }
     }
 
+    const limit = opts.limit ?? 20;
     const result = runSearch(this.db, {
       workspaceId: this.workspaceId,
       intent,
       queryVector,
       vectorModel,
-      limit: opts.limit ?? 20,
+      // Fetch deeper than asked for when a reranker will reorder the pool: a
+      // reranker can only promote what retrieval handed it, so giving it a
+      // thin list wastes it.
+      limit: opts.rerank === false ? limit : Math.max(limit, 25),
       anchorId: opts.anchorId,
       includeArchived: opts.includeArchived,
+      annIndex: vectorModel ? this.#annIndexFor(vectorModel) : undefined,
     });
+
+    if (opts.rerank !== false) await this.#rerank(q, intent, result);
+    result.results = result.results.slice(0, limit);
 
     const latencyMs = Date.now() - t0;
     context.logQuery(this.db, {
@@ -843,10 +856,16 @@ export class Chitraq {
    * @param {(n: number, total: number) => void} [onProgress]
    */
   async reindex(onProgress) {
-    return indexer.rebuild(this.db, this.workspaceId, {
+    const result = await indexer.rebuild(this.db, this.workspaceId, {
       embed: (texts) => this.#embedOrThrow(texts),
       onProgress,
     });
+    // Derived state rebuilt together: a stale ANN index over freshly rebuilt
+    // vectors would quietly return neighbours that no longer exist.
+    this.#annCache.clear();
+    salience.refresh(this.db, this.workspaceId);
+    const vectorIndex = this.buildVectorIndex();
+    return { ...result, vectorIndex };
   }
 
   /**
@@ -887,13 +906,160 @@ export class Chitraq {
   // ============================================================ internals
 
   /**
+   * Reorder the retrieved pool with the rerank capability.
+   *
+   * Retrieval decides *what is plausible*; reranking decides *what is best*,
+   * with the whole passage in view rather than a bag of terms. The scores are
+   * blended rather than replaced: fusion already encodes agreement between
+   * several independent signals, and discarding that for one reranker's
+   * opinion loses information.
+   *
+   * Skipped for one-word and filter-only queries, where there is nothing for a
+   * reranker to weigh, and absorbed entirely if the capability is unavailable.
+   *
+   * @param {string} q
+   * @param {any} intent
+   * @param {{results: any[], signals: string[]}} result
+   */
+  async #rerank(q, intent, result) {
+    if (result.results.length < 3 || intent.terms.length < 2) return;
+
+    const run = await this.router.tryRun(
+      Capability.Rerank,
+      {
+        query: q,
+        candidates: result.results.map((r) => ({
+          id: r.id,
+          text: `${r.title}\n${r.excerpt ?? ''}`,
+        })),
+      },
+      { workspaceId: this.workspaceId, contextIds: result.results.map((r) => r.id) }
+    );
+
+    const ranking = run?.result?.ranking;
+    if (!ranking?.length) return;
+
+    const byId = new Map(ranking.map((r) => [r.id, r.score ?? 0]));
+    const topFusion = Math.max(...result.results.map((r) => r.score), 1e-9);
+
+    for (const hit of result.results) {
+      const rerankScore = byId.get(hit.id) ?? 0;
+      // Fusion scores are normalised into the reranker's 0..1 range before
+      // blending. Without that, the RRF scale (~0.03) would make the reranker
+      // dominant by accident rather than by design.
+      const blended = 0.6 * (hit.score / topFusion) + 0.4 * rerankScore;
+      hit.why.rerank = { score: round4(rerankScore), provider: run.provider };
+      hit.score = round4(blended * topFusion);
+    }
+
+    result.results.sort((a, b) => b.score - a.score || (a.id < b.id ? -1 : 1));
+    result.signals.push('reranked');
+  }
+
+  /**
+   * The approximate vector index for a model, built on demand and cached.
+   *
+   * Returns undefined below the size where approximation pays for itself, so
+   * small workspaces always get exact results. See retrieval/ann.js.
+   * @param {string} model
+   */
+  #annIndexFor(model) {
+    // Only ever returns an index that already exists. Building one takes
+    // seconds at scale, and a search is the last place to discover that — so
+    // building happens at reindex, and until then search is exact and correct.
+    return this.#annCache.get(model)?.index;
+  }
+
+  /**
+   * Fit the approximate vector index for this workspace.
+   *
+   * Called during reindex and available on its own. Below the measured
+   * threshold it deliberately does nothing: an index that costs seconds to
+   * build to save a millisecond per query is not worth having.
+   *
+   * @param {{force?: boolean}} [opts]
+   */
+  buildVectorIndex(opts = {}) {
+    const models = this.db
+      .prepare('SELECT model, COUNT(*) AS n FROM embedding WHERE workspace_id = ? GROUP BY model')
+      .all(this.workspaceId);
+
+    const built = [];
+    for (const { model, n } of models) {
+      if (!opts.force && !ann.shouldUse(Number(n))) continue;
+      const index = ann.build(this.db, { workspaceId: this.workspaceId, model: String(model) });
+      if (index) {
+        this.#annCache.set(String(model), { index });
+        built.push({ model, vectors: index.size, lists: index.centroids.length, ms: index.builtMs });
+      }
+    }
+    return { built, skipped: models.length - built.length };
+  }
+
+  /**
+   * Measure the approximate index against the exact scan, on real vectors.
+   * @param {{queries?: string[], probes?: number}} [opts]
+   */
+  async benchmarkVectorIndex(opts = {}) {
+    const model = this.db
+      .prepare('SELECT model FROM embedding WHERE workspace_id = ? LIMIT 1')
+      .get(this.workspaceId)?.model;
+    if (!model) return { usable: false, reason: 'no vectors in this workspace' };
+
+    const texts = opts.queries?.length
+      ? opts.queries
+      : this.db
+          .prepare('SELECT text FROM chunk WHERE workspace_id = ? ORDER BY id LIMIT 20')
+          .all(this.workspaceId)
+          .map((r) => String(r.text).slice(0, 200));
+    if (!texts.length) return { usable: false, reason: 'no text to build queries from' };
+
+    const embedded = await this.#embed(texts);
+    if (!embedded) return { usable: false, reason: 'no embedding capability' };
+
+    return ann.benchmark(this.db, {
+      workspaceId: this.workspaceId,
+      model: String(model),
+      queries: embedded.vectors,
+      probes: opts.probes,
+    });
+  }
+
+  /**
+   * Recompute stored salience, which browse and timeline sort on.
+   * Ranking computes salience live, so a stale column cannot make search wrong.
+   */
+  refreshSalience() {
+    return salience.refresh(this.db, this.workspaceId);
+  }
+
+  /**
    * @param {any} object
    */
   async #index(object) {
     if (!object) return null;
-    return indexer.indexObject(this.db, object, {
+    const result = await indexer.indexObject(this.db, object, {
       embed: (texts) => this.#embedOrThrow(texts),
     });
+
+    // Keep any live approximate index current. Assignment is O(k·dim) per
+    // vector, so this is imperceptible — and skipping it would quietly make
+    // new captures unfindable by semantic search until the next reindex.
+    for (const [model, entry] of this.#annCache) {
+      const rows = this.db
+        .prepare('SELECT chunk_id, object_id, vec, dim FROM embedding WHERE object_id = ? AND model = ?')
+        .all(object.id, model);
+      for (const row of rows) {
+        ann.add(entry.index, {
+          chunkId: String(row.chunk_id),
+          objectId: String(row.object_id),
+          vec: indexer.decodeVector(row.vec),
+        });
+      }
+      if (ann.isStale(entry.index)) entry.stale = true;
+    }
+
+    return result;
   }
 
   /**
@@ -914,6 +1080,11 @@ export class Chitraq {
     if (!result) throw new Error('No embedding capability is available.');
     return result;
   }
+}
+
+/** @param {number} n */
+function round4(n) {
+  return Math.round(n * 1e6) / 1e6;
 }
 
 /** @param {string} text */
