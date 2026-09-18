@@ -415,3 +415,27 @@ test('a fast provider is still escalated to automatically', async () => {
   assert.ok(!answered.ladder.heldBackForSpeed);
   c.close();
 });
+
+test('a cached answer still reports the wait for a better one', async () => {
+  const c = await memoryWithAnswer();
+  const slow = countingModel();
+  const inner = slow.capabilities.answer.run;
+  slow.capabilities.answer.run = async (task) => {
+    await new Promise((r) => setTimeout(r, 120));
+    return inner(task);
+  };
+  c.addProvider(slow);
+  c.setPolicy({ autoEscalateMaxMs: 50 });
+  for (let i = 0; i < 3; i++) await c.ask(`compare option ${i}`, { cache: false });
+
+  await c.ask('why did we drop the redis cache');
+  const cached = await c.ask('why did we drop the redis cache');
+
+  assert.equal(cached.cached, true);
+  assert.equal(cached.ladder.canEscalate, true);
+  assert.ok(
+    cached.ladder.estimatedWaitMs >= 100,
+    'a cached answer must not drop the wait estimate the button needs'
+  );
+  c.close();
+});

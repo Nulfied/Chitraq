@@ -440,6 +440,8 @@ export class Chitraq {
             threshold: opts.minConfidence ?? 0.55,
             reason: 'answered before, and nothing behind it has changed',
             canEscalate: hit.provider === 'builtin' && hasBetterAnswerer(this.registry),
+            estimatedWaitMs: this.#escalationWait(),
+            heldBackForSpeed: false,
           },
           conflicts: ctx.conflicts,
           notices: proactive.forQuestion(this.db, {
