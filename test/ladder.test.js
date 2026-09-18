@@ -353,3 +353,65 @@ test('questions that differ only by negation get different keys', () => {
   const no = answerCache.keyFor({ question: 'is the migration not finished', context: [] });
   assert.notEqual(yes, no);
 });
+
+test('a slow provider is offered rather than waited on', async () => {
+  const c = await memoryWithAnswer();
+  const slow = countingModel();
+  // Declares itself fast, behaves slowly — exactly what a 3B model on a CPU
+  // does, and the reason the decision uses measured time rather than declared.
+  slow.capabilities.answer.latencyMs = 500;
+  const inner = slow.capabilities.answer.run;
+  slow.capabilities.answer.run = async (task) => {
+    await new Promise((r) => setTimeout(r, 120));
+    return inner(task);
+  };
+  c.addProvider(slow);
+  c.setPolicy({ autoEscalateMaxMs: 50 });
+
+  // Build enough history for the median to be trusted.
+  for (let i = 0; i < 3; i++) {
+    await c.ask(`compare the caching options number ${i}`, { cache: false });
+  }
+  const callsAfterWarmup = slow.calls;
+
+  const answered = await c.ask('compare the caching choices we considered', { cache: false });
+
+  assert.equal(slow.calls, callsAfterWarmup, 'it was not called automatically');
+  assert.equal(answered.ladder.heldBackForSpeed, true);
+  assert.ok(answered.ladder.estimatedWaitMs >= 100, 'the real wait is measured and reported');
+  assert.match(answered.ladder.reason, /takes about/);
+  assert.equal(answered.ladder.canEscalate, true, 'but it is still offered');
+  c.close();
+});
+
+test('asking explicitly overrides the speed guard', async () => {
+  const c = await memoryWithAnswer();
+  const slow = countingModel();
+  const inner = slow.capabilities.answer.run;
+  slow.capabilities.answer.run = async (task) => {
+    await new Promise((r) => setTimeout(r, 120));
+    return inner(task);
+  };
+  c.addProvider(slow);
+  c.setPolicy({ autoEscalateMaxMs: 50 });
+
+  for (let i = 0; i < 3; i++) await c.ask(`compare option ${i}`, { cache: false });
+  const before = slow.calls;
+
+  const forced = await c.askBetter('compare the caching choices', { cache: false });
+  assert.equal(slow.calls, before + 1, 'waiting is fine when the user chose to');
+  assert.equal(forced.escalated, true);
+  c.close();
+});
+
+test('a fast provider is still escalated to automatically', async () => {
+  const c = await memoryWithAnswer();
+  const fast = countingModel();
+  c.addProvider(fast);
+  c.setPolicy({ autoEscalateMaxMs: 8000 });
+
+  const answered = await c.ask('compare the caching choices we considered');
+  assert.equal(answered.escalated, true, 'the guard must not disable escalation generally');
+  assert.ok(!answered.ladder.heldBackForSpeed);
+  c.close();
+});

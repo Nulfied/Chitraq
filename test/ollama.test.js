@@ -293,3 +293,46 @@ test('switching embedding provider is detected and reported', async () => {
   c.close();
   await ollama.close();
 });
+
+test('a small model that answers but reports grounded:false is believed by its answer', async () => {
+  // Found against a live llama3.2: it wrote a correct answer, cited the source
+  // it used, and still set grounded to false. Taking that flag at face value
+  // threw away a perfectly good answer.
+  const ollama = await fakeOllama({
+    handler: (req, body, reply) => {
+      if (req.url !== '/api/generate') return false;
+      reply(200, {
+        response: JSON.stringify({
+          grounded: false,
+          answer: 'We dropped the Redis cache because the hit rate never exceeded 12 percent.',
+          citations: ['[obj_1]'],
+        }),
+      });
+      return true;
+    },
+  });
+  const provider = ollamaProvider({ baseUrl: ollama.baseUrl });
+
+  const result = await provider.capabilities.answer.run({ question: 'why', rendered: '[obj_1] ...' });
+  assert.equal(result.grounded, true, 'an answer with citations is grounded whatever the flag says');
+  assert.match(result.answer, /hit rate/);
+  assert.deepEqual(result.citations, ['obj_1'], 'bracket wrapping from the prompt is stripped');
+  await ollama.close();
+});
+
+test('a grounded:true flag with no answer is not treated as an answer', async () => {
+  const ollama = await fakeOllama({
+    handler: (req, body, reply) => {
+      if (req.url !== '/api/generate') return false;
+      reply(200, { response: JSON.stringify({ grounded: true, answer: '   ', citations: ['obj_9'] }) });
+      return true;
+    },
+  });
+  const provider = ollamaProvider({ baseUrl: ollama.baseUrl });
+
+  const result = await provider.capabilities.answer.run({ question: 'why', rendered: 'x' });
+  assert.equal(result.grounded, false, 'the flag does not conjure an answer that is not there');
+  assert.equal(result.answer, null);
+  assert.deepEqual(result.citations, []);
+  await ollama.close();
+});

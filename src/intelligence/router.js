@@ -31,6 +31,7 @@ import { check as checkBudget } from './budget.js';
  * @property {string[]} [preferProviders] explicit user preference, tried first
  * @property {string[]} [denyProviders]
  * @property {import('./budget.js').Budget} [budget] spend ceilings
+ * @property {number} [autoEscalateMaxMs] never wait longer than this without being asked
  */
 
 /** Local-first by default: nothing leaves the machine unless asked. */
@@ -39,10 +40,14 @@ export const DEFAULT_POLICY = Object.freeze({
   allowRemote: false,
   allowPaid: false,
   maxCostMicros: 0,
-  timeoutMs: 30_000,
+  timeoutMs: 120_000,
   preferProviders: [],
   denyProviders: [],
   budget: {},
+  // Above this, a better answer is offered rather than taken automatically.
+  // Eight seconds is roughly where waiting stops feeling like a response and
+  // starts feeling like a hang.
+  autoEscalateMaxMs: 8_000,
 });
 
 export class CapabilityUnavailableError extends Error {
@@ -369,6 +374,41 @@ function extractUncertainty(result) {
   if (!result || typeof result !== 'object') return null;
   const u = result.uncertainty ?? result.confidence ?? result.caveats;
   return u === undefined ? null : stableStringify(u);
+}
+
+
+/**
+ * What a provider actually costs in time on this machine, from its own history.
+ *
+ * Declared latency is a guess made by whoever wrote the adapter, on their
+ * hardware. Ollama declares 3 seconds for an answer and takes 45 on a laptop
+ * with no GPU. Anything that decides "is this worth waiting for" has to use the
+ * measured number, or it is deciding about somebody else's computer.
+ *
+ * Returns null until there is enough history to be worth trusting.
+ *
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {{workspaceId: string, capability: string, provider: string, minRuns?: number}} q
+ * @returns {number|null} median latency in ms
+ */
+export function measuredLatency(db, q) {
+  const rows = db
+    .prepare(
+      `SELECT latency_ms FROM capability_run
+       WHERE workspace_id = ? AND capability = ? AND provider = ? AND status = 'ok'
+         AND latency_ms IS NOT NULL
+       ORDER BY started_at DESC LIMIT 20`
+    )
+    .all(q.workspaceId, q.capability, q.provider)
+    .map((r) => Number(r.latency_ms))
+    .filter((n) => Number.isFinite(n));
+
+  if (rows.length < (q.minRuns ?? 3)) return null;
+
+  // Median, not mean: one cold model load should not define the experience.
+  rows.sort((a, b) => a - b);
+  const mid = Math.floor(rows.length / 2);
+  return rows.length % 2 ? rows[mid] : Math.round((rows[mid - 1] + rows[mid]) / 2);
 }
 
 /**

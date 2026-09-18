@@ -5,7 +5,7 @@ What is actually built, what is partial, and what is deliberately not built.
 States: **IMPLEMENTED** (built and tested), **PARTIAL** (works, with a stated
 limit), **NOT BUILT** (deliberately deferred).
 
-Last updated: 2026-09-18. 194 tests passing.
+Last updated: 2026-09-18. 199 tests passing.
 
 ---
 
@@ -72,6 +72,31 @@ changed. Unrelated captures do not invalidate anything.
 `test/ladder.test.js` counts model calls directly, so a change that quietly
 starts sending every question to a paid provider fails the suite.
 
+### Measured: Ollama on modest hardware
+
+On an i7-8550U laptop, 8 GB RAM, no usable GPU:
+
+| operation | time | notes |
+|---|---|---|
+| embedding a query | ~190 ms | 768-dim, warm |
+| embedding 17 chunks (reindex) | ~2 s | |
+| quoted answer (no model) | 70–320 ms | the common path |
+| generated answer (llama3.2) | **41–50 s** | CPU only |
+| claim extraction from a page | ~26 s | happens at ingest, not interactively |
+
+Embeddings are the win: fast, and they find paraphrases the built-in embedder
+cannot. Head to head on queries sharing almost no words with the notes
+("can I claim my car on expenses" against "Staff may expense an automobile"),
+the built-in got 1 of 3 and Ollama got 3 of 3.
+
+Generation on CPU is correct but slow, which changed a design decision:
+**escalation now uses measured latency, not declared latency.** Ollama declares
+3 s for an answer and takes 45 s here. Above `autoEscalateMaxMs` (8 s by
+default) Chitraq answers instantly from your own words and *offers* a written
+answer with the real wait on the button, instead of silently hanging for a
+minute. On a machine with a GPU the same code escalates automatically, because
+the measurement says it can.
+
 ### Measured: the approximate index
 
 Run `node scripts/bench-vectors.js [n]` to reproduce. On this machine, 256-dim
@@ -129,12 +154,17 @@ reported on the Status screen; not automatic.
 ### Provider verification status
 
 - **Built-in deterministic** — fully tested, every capability.
-- **Ollama** — tested against a stand-in speaking Ollama's real HTTP protocol
-  (`/api/tags`, `/api/embed`, `/api/generate` with schema-constrained output).
-  This proves request shape, response parsing, health logic, validation of
-  model output, and fallback on failure. It does **not** prove a real Ollama
-  build responds as documented. Ollama is not installed on this machine; run
-  `node scripts/check-ollama.js` against a live endpoint to close that gap.
+- **Ollama** — **verified against a live endpoint** (Ollama 0.34.2,
+  `nomic-embed-text` and `llama3.2`). All checks in `scripts/check-ollama.js`
+  pass: batched embeddings, separation of unrelated text, schema-constrained
+  extraction, grounded answering, and refusal on unrelated material. Also
+  covered by a protocol stand-in in the test suite so the adapter stays
+  regression-tested without Ollama installed.
+
+  Live testing found one real bug a stand-in would not have: llama3.2 writes a
+  correct answer, cites the source it used, and still reports `grounded: false`.
+  The adapter now believes the answer over the flag, and strips the bracket
+  wrapping the model copies from the prompt.
 - **Claude** — written against the current Messages API (structured outputs via
   `output_config.format`, server-side refusal fallbacks, prompt caching on the
   system block). Structurally exercised by the router's tests; **not run against

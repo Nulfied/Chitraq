@@ -930,8 +930,15 @@ function answerView(a, onEscalate) {
       h('span', { class: `badge ${a.escalated ? 'origin-ai' : 'confirmed'}` }, [how.label]),
       how.detail ? h('span', { class: 'meta' }, [how.detail]) : null,
       a.ladder?.canEscalate && onEscalate
-        ? h('button', { class: 'btn quiet', style: 'margin-left:auto', onclick: onEscalate }, [
-            'Ask a model instead',
+        ? h('button', {
+            // The wait is on the button, not discovered after clicking it.
+            class: a.ladder.heldBackForSpeed ? 'btn' : 'btn quiet',
+            style: 'margin-left:auto',
+            onclick: onEscalate,
+          }, [
+            a.ladder.estimatedWaitMs > 4000
+              ? `Ask a model instead (~${Math.round(a.ladder.estimatedWaitMs / 1000)}s)`
+              : 'Ask a model instead',
           ])
         : null,
     ])

@@ -134,10 +134,21 @@ export function ollamaProvider(opts = {}) {
               },
             },
           });
+          // Small models answer well but report badly: a 3B model will write a
+          // correct answer, cite the source it used, and still set grounded to
+          // false. Trust what it produced over what it claims about itself —
+          // an answer with citations is grounded, and a grounded flag with no
+          // answer is not.
+          const answer = String(result.answer ?? '').trim();
+          const citations = (result.citations ?? [])
+            .map((c) => String(c).replace(/^\[|\]$/g, '').trim())
+            .filter(Boolean);
+          const grounded = answer.length > 0;
+
           return {
-            answer: result.grounded ? result.answer : null,
-            grounded: !!result.grounded,
-            citations: result.citations ?? [],
+            answer: grounded ? answer : null,
+            grounded,
+            citations: grounded ? citations : [],
             passages: [],
             uncertainty:
               result.uncertainty ??
@@ -219,9 +230,16 @@ const EPISTEMICS = new Set([
   'fact', 'observation', 'belief', 'hypothesis', 'inference', 'conclusion', 'speculation',
 ]);
 
-const LOCAL_ANSWER_SYSTEM = `Answer only from the material provided, which comes from the user's own notes.
+const LOCAL_ANSWER_SYSTEM = `You answer questions using the material provided, which comes from the user's own notes.
 
-If the material does not answer the question, set grounded to false and leave answer empty. Do not use outside knowledge. Do not guess. Cite the bracketed ids you used. Keep it short.`;
+Decide grounded first:
+- grounded = true when the material contains the answer, even partly. If you can point at a sentence that answers the question, it is true.
+- grounded = false ONLY when nothing in the material bears on the question at all.
+
+When grounded is true, write the answer in one or two sentences and list the ids you used.
+When grounded is false, leave answer empty and list no ids.
+
+Never use knowledge from outside the material. Never guess. Write ids exactly as obj_1, without brackets.`;
 
 const LOCAL_EXTRACT_SYSTEM = `Split the text into separate pieces of knowledge worth remembering.
 

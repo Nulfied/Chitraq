@@ -79,8 +79,19 @@ local language model, still free, still on your machine, still private:
 ```bash
 ollama pull nomic-embed-text
 ollama pull llama3.2
+node scripts/check-ollama.js      # verify it end to end
 node src/server/serve.js          # detected automatically
 ```
+
+Embeddings are the win. They find things the built-in embedder cannot: asked
+"can I claim my car on expenses", the built-in misses a note reading "staff may
+expense an automobile"; Ollama finds it. Reindex after adding them
+(`chitraq reindex`) — Chitraq will tell you if you forget.
+
+Generation is slower on a machine without a GPU. Chitraq measures how long your
+setup actually takes and adapts: if a written answer would take 45 seconds, it
+answers instantly from your own words and offers the slow one on a button,
+rather than making you wait without warning.
 
 Add a Claude key and you get stronger extraction and synthesis:
 

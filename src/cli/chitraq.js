@@ -166,7 +166,10 @@ async function run(command, rest, flags, c) {
             : 'quoted from your own words — no model was called';
         console.log(`  ${dim(`${how} · ${answered.citations.length} item(s) cited`)}`);
         if (answered.ladder?.canEscalate) {
-          console.log(`  ${dim('for a written answer instead:  chitraq ask "…" --better')}`);
+          const wait = answered.ladder.estimatedWaitMs
+            ? ` (about ${Math.round(answered.ladder.estimatedWaitMs / 1000)}s on this machine)`
+            : '';
+          console.log(`  ${dim(`for a written answer instead:  chitraq ask "…" --better${wait}`)}`);
         }
         for (const id of answered.citations) {
           const obj = c.recall(id)?.object;

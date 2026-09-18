@@ -28,7 +28,7 @@ import * as sources from './core/sources.js';
 import * as workspaceStore from './core/workspace.js';
 import * as events from './core/events.js';
 import { Registry, Capability } from './intelligence/registry.js';
-import { Router, DEFAULT_POLICY, runHistory } from './intelligence/router.js';
+import { Router, DEFAULT_POLICY, runHistory, measuredLatency } from './intelligence/router.js';
 import { deterministicProvider, EMBED_MODEL } from './intelligence/providers/deterministic.js';
 import * as gateway from './intelligence/gateway.js';
 import * as budget from './intelligence/budget.js';
@@ -468,7 +468,12 @@ export class Chitraq {
     let run = floor;
     let escalated = false;
 
-    if (escalation.escalate) {
+    // How long escalating would actually take on this machine, measured.
+    const waitMs = this.#escalationWait();
+    const maxWait = opts.maxWaitMs ?? this.router.policy.autoEscalateMaxMs ?? 8000;
+    const tooSlowToWait = opts.escalate !== 'always' && waitMs !== null && waitMs > maxWait;
+
+    if (escalation.escalate && !tooSlowToWait) {
       const better = await this.router.tryRun(Capability.Answer, task, {
         workspaceId: this.workspaceId,
         contextIds,
@@ -514,8 +519,14 @@ export class Chitraq {
       ladder: {
         floorConfidence: floor?.result?.confidence ?? 0,
         threshold: escalation.threshold,
-        reason: escalation.reason,
+        reason: tooSlowToWait
+          ? `${escalation.reason} — but a written answer takes about ${Math.round(waitMs / 1000)}s here`
+          : escalation.reason,
         canEscalate: !escalated && hasBetterAnswerer(this.registry),
+        // What asking a model would cost in time, so an interface can say
+        // "about 45 seconds" on the button instead of spinning silently.
+        estimatedWaitMs: waitMs,
+        heldBackForSpeed: tooSlowToWait && escalation.escalate,
       },
       conflicts: ctx.conflicts,
       notices: proactive.forQuestion(this.db, {
@@ -1316,6 +1327,36 @@ export class Chitraq {
       reason: 'no model was needed',
       threshold,
     };
+  }
+
+
+  /**
+   * Measured time to get an answer from the best non-floor provider.
+   *
+   * Used to decide whether to escalate automatically or to offer it. On a
+   * machine with a GPU this is a couple of seconds and escalation stays
+   * automatic; on a laptop running a 3B model on CPU it is closer to a minute,
+   * and silently making the user wait that long is worse than handing them a
+   * good quoted answer and a button.
+   *
+   * @returns {number|null} null when there is no history to judge by
+   */
+  #escalationWait() {
+    const candidates = this.registry
+      .supporting(Capability.Answer)
+      .filter((p) => !p.deterministic);
+
+    /** @type {number[]} */
+    const measured = [];
+    for (const p of candidates) {
+      const ms = measuredLatency(this.db, {
+        workspaceId: this.workspaceId,
+        capability: Capability.Answer,
+        provider: p.id,
+      });
+      if (ms !== null) measured.push(ms);
+    }
+    return measured.length ? Math.min(...measured) : null;
   }
 
   /**
