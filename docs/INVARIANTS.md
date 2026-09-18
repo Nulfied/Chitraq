@@ -192,7 +192,158 @@ and events.
 
 ---
 
+## Identity and merging
+
+**30. Deduplication is scoped to origin.**
+Identical text you wrote and identical text a model produced are two pieces of
+knowledge, not one. Collapsing them would destroy the provenance distinction
+the system exists to keep.
+· `objects.findByContent`
+· *capturing identical content twice returns the original*
+
+**31. Only an exact name match merges an entity automatically.**
+Anything weaker is a suggestion with a stated reason. A wrong merge fuses two
+histories and is tedious to unpick, so the bar is high and the decision is the
+user's.
+· `entities.resolve`, `entities.duplicateCandidates`
+· *similar names are suggested, never merged automatically*
+· *a shared surname alone is not enough to suggest a merge*
+
+**32. Merging preserves the merged entity.**
+It is superseded, not deleted; its names become aliases; every edge that
+referenced it is re-pointed.
+· `entities.merge`
+· *merging re-points every mention and keeps the merged entity as history*
+
+**33. Values are not entities.**
+Dates, money and percentages are measurements. Making every "40%" a node would
+swamp the graph with noise.
+· `entities.entityTypeFor`
+· *values are not turned into entities*
+
+---
+
+## Moving memory between machines
+
+**34. Import never overwrites what is already here.**
+Ids are preserved so provenance and links survive, but a stale export cannot
+undo a local edit.
+· `transfer.importWorkspace`
+· *an import never overwrites knowledge already here*
+
+**35. Rows that would dangle are dropped with a warning.**
+A broken reference written quietly is worse than a missing row reported loudly.
+· `transfer.importWorkspace`
+· *rows that would dangle are dropped with a warning, not written broken*
+
+**36. Sync records divergence rather than resolving it.**
+Where the same object was edited on two devices, local state is kept, the
+remote version is preserved, and a conflict is raised. Last-writer-wins would
+destroy one edit with nobody the wiser.
+· `sync.apply`, `sync.recordDivergence`
+· *independent edits to the same object raise a conflict instead of losing one*
+
+**37. Sync never deletes.**
+A peer that has not seen your object does not get to remove it.
+· `sync.apply`
+· *sync never deletes anything the peer has not seen*
+
+---
+
+## Cost and degradation
+
+**38. Budget is checked before the call, not after.**
+A ceiling you can only discover by exceeding it is not a ceiling.
+· `Router.candidates`, `budget.check`
+· *a daily budget stops paid providers once it is spent*
+
+**39. Running out of budget degrades intelligence, never memory.**
+Paid providers stop being offered; the free and deterministic ones answer.
+Capture, search and history never needed a paid provider.
+· `budget.check` (free calls are never blocked)
+· *running out of budget degrades intelligence, never memory*
+
+**40. A provider going down is recorded.**
+A failed health check drops a provider from routing before it is ever called,
+so nothing lands in the run log — which would make an outage invisible.
+· `Registry.isAvailable`, `onHealthChange`
+· *if Ollama dies mid-session, memory carries on without it*
+
+---
+
+## Attention and prominence
+
+**41. Salience is a nudge, not a lever.**
+Bounded to ±15%. A memory engine that ranks by popularity stops being able to
+find the thing you looked at once, two years ago — which is what you need it for.
+· `salience.multiplier`
+· *salience can never outweigh relevance*
+· *nothing is ever hidden by low salience*
+
+**42. Approximation is opt-in and measured.**
+The vector index is only used above the size where it is measurably faster, is
+built at reindex rather than inside a search, and reports its own recall.
+· `ann.shouldUse`, `ann.benchmark`
+· *small workspaces never build an index*
+
+---
+
+## Proactive behaviour
+
+**43. Notices are read-only.**
+Proactive surfacing points at objects and explains itself. It asserts nothing
+and changes nothing.
+· `proactive.forObject`, `proactive.forWorkspace`
+· *proactive surfacing never modifies memory*
+
+**44. Silence is the default.**
+A notice must clear a threshold. Weak signals produce nothing rather than a maybe.
+· threshold in `proactive.forObject`
+· *unrelated material produces no notices at all*
+
+**45. Expiring is not rejecting.**
+A proposal nobody looked at is not a decision. Only a rejection is a correction
+signal.
+· `gateway.expireStale`
+· *stale proposals expire without being marked rejected*
+
+---
+
+## Authentication
+
+**46. Authentication is off until an account exists.**
+A local single-user install reached over loopback needs no login step.
+· `auth.isEnabled`, the gate in `server/http.js`
+· *authentication is off until an account exists*
+
+**47. Secrets are never stored in a usable form.**
+Passwords are scrypt-hashed with a per-user salt; session tokens are stored
+hashed, so a database dump yields no live sessions.
+· `auth.setPassword`, `auth.openSession`
+· *tokens are stored hashed, so a database dump yields no live sessions*
+
+**48. A failed login says nothing about why.**
+One message whether the user or the password was wrong, and a hash is computed
+either way so timing does not reveal it.
+· `auth.login`
+· *the same message is returned whether the user or the password is wrong*
+
+---
+
+## Reading what cannot be read
+
+**49. An unreadable file says so and names what would read it.**
+A scanned PDF, an image or an audio file is captured verbatim and reports the
+capability that would unlock it. Returning mojibake would put nonsense into
+memory and call it knowledge.
+· `capture/parse.js`, `capture/pdf.js`
+· *a scanned PDF names the capability that would read it*
+· *an encrypted PDF says so instead of returning rubbish*
+
+---
+
 ## Changing an invariant
+
 
 These are not arbitrary. Each one exists because violating it makes memory
 untrustworthy in a way the user cannot see. If one genuinely has to change,
