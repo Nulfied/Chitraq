@@ -11,14 +11,18 @@
  * Setup:
  *     ollama pull nomic-embed-text     # embeddings — the big retrieval win
  *     ollama pull llama3.2             # general language tasks
+ *     ollama pull moondream            # reading images (optional, small)
  */
 
+import { readFile } from 'node:fs/promises';
 import { Chitraq } from '../src/chitraq.js';
 import { ollamaProvider } from '../src/intelligence/providers/ollama.js';
+import { ollamaVisionProvider } from '../src/intelligence/providers/ollama-vision.js';
 
 const baseUrl = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
 const embedModel = process.env.CHITRAQ_OLLAMA_EMBED || 'nomic-embed-text';
 const model = process.env.CHITRAQ_OLLAMA_MODEL || 'llama3.2';
+const visionModel = process.env.CHITRAQ_OLLAMA_VISION || 'moondream';
 
 let failures = 0;
 const check = (label, ok, detail = '') => {
@@ -153,6 +157,45 @@ if (has(embedModel)) {
     hit ? 'found it with almost no shared words' : 'did not find it — check the embedding model'
   );
   c.close();
+}
+
+// --- vision ---------------------------------------------------------------
+//
+// Optional. A machine without a vision model pulled is a correct machine; the
+// slot is simply reported as unserved, which is what it was before.
+
+if (has(visionModel)) {
+  console.log(`\n  Vision (${visionModel})\n`);
+  const vision = ollamaVisionProvider({ baseUrl, model: visionModel });
+  check('the vision provider reports itself available', await vision.available());
+
+  const image = await readFile(new URL('../test/fixtures/whiteboard.png', import.meta.url));
+  const started = Date.now();
+  const read = await vision.capabilities['ocr.image'].run({ bytes: image });
+  const seconds = ((Date.now() - started) / 1000).toFixed(1);
+
+  // The image says "SHIP IN MARCH" and "P99 38 MS". A small model will not get
+  // all of it, which is the point: the check is that it read *something* real,
+  // not that it was perfect.
+  const words = read.text.toLowerCase();
+  check('it read text out of a real image', read.legible, `${seconds}s`);
+  check('and the text is actually from the image', words.includes('ship') || words.includes('march'),
+    JSON.stringify(read.text));
+
+  // Capture end to end: the bytes become text, and the text remembers that a
+  // machine produced it.
+  const c = new Chitraq({ path: ':memory:', providers: [vision] });
+  const result = await c.ingest({ bytes: image, filename: 'whiteboard.png' });
+  check('capture routes an image through it', result.reading?.via.capability === 'ocr.image');
+  check(
+    'and the source records that its text was read, not written',
+    JSON.parse(String(c.db.prepare('SELECT meta FROM source').get().meta)).textVia?.provider ===
+      'ollama-vision'
+  );
+  c.close();
+} else {
+  console.log(`\n  Vision: no ${visionModel} pulled. Images stay captured but unread, as documented.`);
+  console.log(`    ollama pull ${visionModel}\n`);
 }
 
 console.log(

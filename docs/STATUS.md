@@ -151,7 +151,7 @@ reported on the Status screen; not automatic.
 | **Cost reporting** | IMPLEMENTED | By provider, capability and day |
 | Deterministic provider (11 capabilities) | IMPLEMENTED | |
 | Ollama provider | IMPLEMENTED | Verified live — see below |
-| **Ollama vision provider** | IMPLEMENTED | Verified live with moondream — `ocr.image`, `vision.describe` |
+| **Ollama vision provider** | IMPLEMENTED | Verified live with moondream. Uses whichever vision model is pulled — `ocr.image`, `vision.describe` |
 | **Whisper provider** | IMPLEMENTED | Protocol stand-in only; not run against a real engine |
 | Claude provider | IMPLEMENTED | Structured outputs, refusal fallbacks, prompt caching |
 

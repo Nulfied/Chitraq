@@ -46,7 +46,10 @@ export function loadConfig(env = process.env) {
     providers.push(
       ollamaVisionProvider({
         baseUrl: env.OLLAMA_HOST || 'http://127.0.0.1:11434',
-        model: env.CHITRAQ_OLLAMA_VISION || 'llava',
+        // No default. Naming one would mean "install exactly this or get
+        // nothing"; left unset, whichever vision model is already pulled is
+        // the one used.
+        model: env.CHITRAQ_OLLAMA_VISION,
       })
     );
   }

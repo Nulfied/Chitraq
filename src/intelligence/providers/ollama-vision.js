@@ -7,7 +7,13 @@
  * a chat, a scanned receipt — text out of pixels, on your own machine, with the
  * image never leaving it.
  *
- *     ollama pull llava            # or moondream (small), llama3.2-vision (better)
+ *     ollama pull moondream        # small and quick
+ *     ollama pull llava            # better
+ *     ollama pull llama3.2-vision  # better still, if the machine can take it
+ *
+ * No model is named by default. Whichever of these is already pulled is the
+ * one used, because the difference between them is quality and size, not
+ * interface, and demanding one specific name means most machines get nothing.
  *
  * **What this deliberately does not serve: `ocr.document`.** A scanned PDF holds
  * pages as embedded images, and getting them out means rasterising or decoding
@@ -27,15 +33,49 @@
 import { Capability } from '../registry.js';
 
 /**
+ * Vision models this will use if one is already pulled, best first.
+ *
+ * Naming a single default would mean "install exactly this one or get nothing",
+ * and the difference between the options is quality and size, not interface.
+ * Whichever is already there is the right one to use.
+ */
+export const VISION_MODELS = Object.freeze([
+  'llama3.2-vision', 'qwen2.5vl', 'minicpm-v', 'llava', 'bakllava', 'granite3.2-vision', 'moondream',
+]);
+
+/**
  * @param {object} [opts]
  * @param {string} [opts.baseUrl]
- * @param {string} [opts.model]      a vision model, e.g. llava or llama3.2-vision
+ * @param {string} [opts.model]      a specific vision model; omitted means whichever is pulled
  * @param {number} [opts.timeoutMs]
  * @returns {import('../registry.js').Provider}
  */
 export function ollamaVisionProvider(opts = {}) {
   const baseUrl = (opts.baseUrl ?? 'http://127.0.0.1:11434').replace(/\/+$/, '');
-  const model = opts.model ?? 'llava';
+  /** Resolved on first contact when no model was named. */
+  let model = opts.model ?? null;
+
+  /**
+   * Which vision model to talk to.
+   *
+   * Asked once and then remembered. A machine with none pulled returns null,
+   * which is the honest answer and the reason the capability stays unserved.
+   *
+   * @returns {Promise<string|null>}
+   */
+  async function resolveModel() {
+    if (model) return model;
+    try {
+      const res = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(2000) });
+      if (!res.ok) return null;
+      const { models = [] } = await res.json();
+      const pulled = new Set(models.map((m) => String(m.name).split(':')[0]));
+      model = VISION_MODELS.find((m) => pulled.has(m)) ?? null;
+      return model;
+    } catch {
+      return null;
+    }
+  }
   // Vision on CPU is slow and the images can be large, so the ceiling is higher
   // than the text provider's. Being killed at 60s mid-transcription wastes the
   // whole run.
@@ -45,11 +85,14 @@ export function ollamaVisionProvider(opts = {}) {
    * @param {{prompt: string, images: string[], system?: string, schema?: object}} req
    */
   async function generate(req) {
+    const chosen = await resolveModel();
+    if (!chosen) throw new Error('No vision model is pulled. Try: ollama pull moondream');
+
     const res = await fetch(`${baseUrl}/api/generate`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        model,
+        model: chosen,
         prompt: req.prompt,
         system: req.system,
         images: req.images,
@@ -67,25 +110,34 @@ export function ollamaVisionProvider(opts = {}) {
 
   return {
     id: 'ollama-vision',
-    label: `Ollama vision (${model})`,
+    get label() {
+      return `Ollama vision (${model ?? 'no model pulled'})`;
+    },
     locality: 'local',
     cost: 'free',
-    model,
-    modelVersion: model,
+    get model() {
+      return model;
+    },
+    get modelVersion() {
+      return model;
+    },
     deterministic: false,
 
     available: async () => {
-      try {
-        const res = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(2000) });
-        if (!res.ok) return false;
-        const { models = [] } = await res.json();
-        // The needed model, specifically. A running Ollama with only a text
-        // model is not a vision provider, and reporting available here would
-        // route images to something that cannot see them.
-        return models.some((m) => String(m.name).split(':')[0] === model.split(':')[0]);
-      } catch {
-        return false;
+      // A model that can actually see, specifically. A running Ollama with only
+      // a text model is not a vision provider, and saying yes here would route
+      // images to something that cannot look at them.
+      if (opts.model) {
+        try {
+          const res = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(2000) });
+          if (!res.ok) return false;
+          const { models = [] } = await res.json();
+          return models.some((m) => String(m.name).split(':')[0] === opts.model.split(':')[0]);
+        } catch {
+          return false;
+        }
       }
+      return (await resolveModel()) !== null;
     },
 
     capabilities: {
