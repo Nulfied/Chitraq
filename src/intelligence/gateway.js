@@ -662,3 +662,110 @@ export function conflicts(db, opts) {
       .all(...args, Math.min(opts.limit ?? 50, 500))
   ).map((r) => ({ ...r, detail: JSON.parse(r.detail) }));
 }
+
+/**
+ * Accept or reject many proposals at once.
+ *
+ * Ingesting a long document can produce dozens of proposals, and reviewing
+ * them one at a time is how a review queue becomes a graveyard. Bulk actions
+ * make the queue tractable — but they are still explicit decisions, made by a
+ * human, over a filtered set they chose.
+ *
+ * Failures do not stop the run: one stale proposal in a batch of forty should
+ * not block the other thirty-nine. Each outcome is reported individually.
+ *
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {object} input
+ * @param {string} input.workspaceId
+ * @param {'accept'|'reject'} input.action
+ * @param {string[]} [input.ids]           explicit ids, or use the filters below
+ * @param {number} [input.minConfidence]
+ * @param {string} [input.op]
+ * @param {string} [input.runId]           everything proposed by one capability run
+ * @param {number} [input.limit]
+ * @param {string} [input.note]
+ * @param {import('../core/events.js').Actor} actor
+ * @returns {{action: string, succeeded: any[], failed: Array<{id: string, error: string}>}}
+ */
+export function bulk(db, input, actor) {
+  let candidates;
+
+  if (input.ids?.length) {
+    candidates = plainAll(
+      db
+        .prepare(
+          `SELECT * FROM proposal WHERE workspace_id = ? AND status = 'pending'
+             AND id IN (${input.ids.map(() => '?').join(',')})`
+        )
+        .all(input.workspaceId, ...input.ids)
+    );
+  } else {
+    const where = ["workspace_id = ?", "status = 'pending'"];
+    const args = [input.workspaceId];
+    if (typeof input.minConfidence === 'number') {
+      where.push('confidence >= ?');
+      args.push(input.minConfidence);
+    }
+    if (input.op) {
+      where.push('op = ?');
+      args.push(input.op);
+    }
+    if (input.runId) {
+      where.push('run_id = ?');
+      args.push(input.runId);
+    }
+    candidates = plainAll(
+      db
+        .prepare(`SELECT * FROM proposal WHERE ${where.join(' AND ')} ORDER BY confidence DESC, created_at ASC LIMIT ?`)
+        .all(...args, Math.min(input.limit ?? 100, 1000))
+    );
+  }
+
+  const succeeded = [];
+  const failed = [];
+
+  for (const row of candidates) {
+    try {
+      const result =
+        input.action === 'accept'
+          ? accept(db, row.id, actor, input.note)
+          : reject(db, row.id, actor, input.note);
+      succeeded.push(input.action === 'accept' ? result.applied : { id: row.id });
+    } catch (err) {
+      // A proposal that went stale between listing and applying is expected,
+      // not exceptional. Record it and carry on.
+      failed.push({ id: row.id, error: String(err?.message ?? err) });
+    }
+  }
+
+  return { action: input.action, succeeded, failed };
+}
+
+/**
+ * Mark old pending proposals as expired.
+ *
+ * A proposal nobody has looked at in months is not a decision waiting to be
+ * made, it is clutter hiding the ones that matter. Expiring is not rejecting:
+ * the proposal is kept, and the distinction between "I said no" and "I never
+ * looked" is preserved, because only the first is a correction signal.
+ *
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {{workspaceId: string, olderThanDays?: number}} opts
+ * @param {import('../core/events.js').Actor} [actor]
+ */
+export function expireStale(db, opts, actor = SYSTEM_ACTOR) {
+  const cutoff = new Date(Date.now() - (opts.olderThanDays ?? 90) * 86400000).toISOString();
+
+  return tx(db, () => {
+    const stale = plainAll(
+      db
+        .prepare(`SELECT id FROM proposal WHERE workspace_id = ? AND status = 'pending' AND created_at < ?`)
+        .all(opts.workspaceId, cutoff)
+    );
+
+    for (const row of stale) {
+      db.prepare(`UPDATE proposal SET status = 'expired', reviewed_at = ? WHERE id = ?`).run(now(), row.id);
+    }
+    return { expired: stale.length, cutoff };
+  });
+}

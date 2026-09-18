@@ -29,12 +29,14 @@ import { Registry, Capability } from './intelligence/registry.js';
 import { Router, DEFAULT_POLICY, runHistory } from './intelligence/router.js';
 import { deterministicProvider, EMBED_MODEL } from './intelligence/providers/deterministic.js';
 import * as gateway from './intelligence/gateway.js';
+import * as budget from './intelligence/budget.js';
 import * as indexer from './retrieval/indexer.js';
 import * as ann from './retrieval/ann.js';
 import * as salience from './retrieval/salience.js';
 import { search as runSearch, similarTo } from './retrieval/search.js';
 import { parse as parseQuery } from './retrieval/query.js';
 import * as context from './context/builder.js';
+import * as proactive from './context/proactive.js';
 import { parseSource } from './capture/parse.js';
 import { estimateTokens } from './core/text.js';
 
@@ -68,6 +70,7 @@ export class Chitraq {
 
     const boot = workspaceStore.bootstrap(this.db);
     this.workspaceId = boot.workspace.id;
+    this.router.workspaceId = boot.workspace.id;
     this.principal = boot.principal;
     this.actor = { id: boot.principal.id, kind: /** @type {const} */ ('user') };
   }
@@ -378,6 +381,11 @@ export class Chitraq {
       provider: run?.provider ?? null,
       degraded: run?.degraded ?? true,
       conflicts: ctx.conflicts,
+      notices: proactive.forQuestion(this.db, {
+        workspaceId: this.workspaceId,
+        question,
+        contextIds: ctx.items.map((i) => i.id),
+      }),
       context: ctx,
       latencyMs: Date.now() - t0,
     };
@@ -626,7 +634,13 @@ export class Chitraq {
       }
     }
 
-    return { keywords, entities: found, mentions, similar, proposals, conflicts };
+    const notices = proactive.forObject(this.db, {
+      workspaceId: this.workspaceId,
+      objectId,
+      similar,
+    });
+
+    return { keywords, entities: found, mentions, similar, proposals, conflicts, notices };
   }
 
   // ============================================================ ENTITIES
@@ -903,6 +917,90 @@ export class Chitraq {
     return result;
   }
 
+
+  /**
+   * Accept or decline many proposals at once, by id or by filter.
+   * @param {{action: 'accept'|'reject', ids?: string[], minConfidence?: number, op?: string, runId?: string, limit?: number, note?: string}} input
+   */
+  async reviewAll(input) {
+    const result = gateway.bulk(this.db, { workspaceId: this.workspaceId, ...input }, this.actor);
+    for (const applied of result.succeeded) {
+      if (applied?.kind === 'object') await this.#index(objects.get(this.db, applied.id));
+    }
+    return result;
+  }
+
+  /**
+   * Retire pending proposals nobody has looked at in months.
+   * Expiring is not rejecting: only a rejection is a correction signal.
+   * @param {{olderThanDays?: number}} [opts]
+   */
+  expireProposals(opts = {}) {
+    return gateway.expireStale(this.db, { workspaceId: this.workspaceId, ...opts }, this.actor);
+  }
+
+  // =========================================================== PROACTIVE
+
+  /**
+   * Things worth telling the user without being asked: what this overlaps
+   * with, what it disagrees with, what they already rejected.
+   *
+   * Read-only, thresholded, and always pointing at objects the user can open.
+   * @param {string} objectId
+   * @param {{minStrength?: number}} [opts]
+   */
+  async noticesFor(objectId, opts = {}) {
+    const object = objects.get(this.db, objectId);
+    if (!object) return [];
+
+    const embedded = await this.#embed([`${object.title}\n${object.body}`]);
+    const similar = similarTo(this.db, {
+      workspaceId: this.workspaceId,
+      objectId,
+      vector: embedded?.vectors[0],
+      model: embedded?.model,
+      limit: 6,
+      minScore: 0.4,
+    });
+
+    return proactive.forObject(this.db, {
+      workspaceId: this.workspaceId,
+      objectId,
+      similar,
+      minStrength: opts.minStrength,
+    });
+  }
+
+  /**
+   * Notices about the workspace as a whole: unresolved disagreements, a review
+   * backlog, figures nobody has checked in a year, unconnected material.
+   * @param {{staleDays?: number, limit?: number}} [opts]
+   */
+  notices(opts = {}) {
+    return proactive.forWorkspace(this.db, { workspaceId: this.workspaceId, ...opts });
+  }
+
+  // ============================================================== BUDGET
+
+  /** What intelligence has cost, by provider, capability and day. */
+  costs(opts = {}) {
+    return budget.report(this.db, this.workspaceId, opts);
+  }
+
+  /**
+   * Set spend ceilings. Running out degrades intelligence, never memory:
+   * paid providers stop being offered and the free ones answer instead.
+   * @param {import('./intelligence/budget.js').Budget} limits
+   */
+  setBudget(limits) {
+    return this.router.setPolicy({ budget: { ...this.router.policy.budget, ...limits } });
+  }
+
+  /** @param {number} costMicros */
+  canAfford(costMicros) {
+    return budget.check(this.db, this.workspaceId, this.router.policy.budget ?? {}, costMicros);
+  }
+
   // ============================================================ internals
 
   /**
@@ -1095,5 +1193,5 @@ function truncateTitle(text) {
 
 export {
   DEFAULT_POLICY, estimateTokens, gateway, objects, relations, sources,
-  events, indexer, context, entities, transfer,
+  events, indexer, context, entities, transfer, proactive, budget, ann, salience,
 };

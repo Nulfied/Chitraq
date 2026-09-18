@@ -19,6 +19,7 @@
 
 import { newRunId, now, hashJson, stableStringify } from '../core/ids.js';
 import { emit, EventType } from '../core/events.js';
+import { check as checkBudget } from './budget.js';
 
 /**
  * @typedef {object} Policy
@@ -29,6 +30,7 @@ import { emit, EventType } from '../core/events.js';
  * @property {number} [timeoutMs]
  * @property {string[]} [preferProviders] explicit user preference, tried first
  * @property {string[]} [denyProviders]
+ * @property {import('./budget.js').Budget} [budget] spend ceilings
  */
 
 /** Local-first by default: nothing leaves the machine unless asked. */
@@ -40,6 +42,7 @@ export const DEFAULT_POLICY = Object.freeze({
   timeoutMs: 30_000,
   preferProviders: [],
   denyProviders: [],
+  budget: {},
 });
 
 export class CapabilityUnavailableError extends Error {
@@ -68,9 +71,10 @@ export class Router {
    * @param {import('node:sqlite').DatabaseSync} [deps.db]  omit to route without recording
    * @param {Policy} [deps.policy]
    */
-  constructor({ registry, db, policy }) {
+  constructor({ registry, db, policy, workspaceId }) {
     this.registry = registry;
     this.db = db;
+    this.workspaceId = workspaceId;
     this.policy = { ...DEFAULT_POLICY, ...(policy ?? {}) };
   }
 
@@ -114,6 +118,20 @@ export class Router {
       if ((impl.costMicros ?? 0) > (policy.maxCostMicros ?? 0) && provider.cost === 'paid') {
         rejected.push({ id: provider.id, why: 'exceeds the per-call cost limit' });
         continue;
+      }
+      // Budget is checked at selection, not after the fact. A ceiling you can
+      // only discover by exceeding it is not a ceiling.
+      if (this.db && policy.budget && (impl.costMicros ?? 0) > 0) {
+        const verdict = checkBudget(
+          this.db,
+          this.workspaceId ?? 'unknown',
+          policy.budget,
+          impl.costMicros ?? 0
+        );
+        if (!verdict.allowed) {
+          rejected.push({ id: provider.id, why: verdict.reason ?? 'over budget' });
+          continue;
+        }
       }
       if (!(await this.registry.isAvailable(provider))) {
         rejected.push({ id: provider.id, why: 'not reachable' });
@@ -160,6 +178,7 @@ export class Router {
    * @returns {Promise<{result: any, run: any, provider: string, degraded: boolean}|null>}
    */
   async run(capability, task, opts = {}) {
+    if (opts.workspaceId) this.workspaceId = opts.workspaceId;
     const { eligible, rejected } = await this.candidates(capability, opts.policy);
     const policy = { ...this.policy, ...(opts.policy ?? {}) };
 
