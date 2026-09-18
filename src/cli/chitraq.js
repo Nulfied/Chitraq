@@ -34,6 +34,7 @@ const COMMANDS = {
   erase: { args: '<id> <reason...>', help: 'Irreversibly destroy an object and its history.' },
   entities: { args: '', help: 'People, places, products and projects found in your notes.' },
   merge: { args: '<keepId> <mergeId>', help: 'Merge two entities into one.' },
+  concepts: { args: '', help: 'Ideas that recur across your notes. --propose to suggest them.' },
   notices: { args: '', help: 'Things worth knowing without asking.' },
   costs: { args: '', help: 'What intelligence has cost, by provider and capability.' },
   import: { args: '<file>', help: 'Import a Chitraq export into this memory.' },
@@ -273,6 +274,33 @@ async function run(command, rest, flags, c) {
         }
       }
       console.log('');
+      break;
+    }
+
+    case 'concepts': {
+      if (flags.propose) {
+        const result = c.proposeConcepts({
+          minDocuments: flags.min ? Number(flags.min) : undefined,
+        });
+        console.log(`\n  ${result.found} recurring idea(s), ${result.proposals.length} newly suggested`);
+        if (result.proposals.length) console.log(`  Review with: chitraq review`);
+        console.log('');
+        break;
+      }
+
+      const found = c.concepts({ minDocuments: flags.min ? Number(flags.min) : undefined });
+      if (!found.length) {
+        console.log(`\n  Nothing recurs across enough of your notes yet.`);
+        console.log(`  A concept here means a phrase running through several separate`);
+        console.log(`  pieces of knowledge \u2014 it needs a body of notes to find one.\n`);
+        break;
+      }
+      console.log('');
+      for (const concept of found) {
+        console.log(`  ${concept.phrase}`);
+        console.log(`    ${dim(`${concept.documents} notes \u00b7 ${concept.occurrences} mentions \u00b7 confidence ${concept.confidence}`)}`);
+      }
+      console.log(`\n  Suggest these as entities with: chitraq concepts --propose\n`);
       break;
     }
 

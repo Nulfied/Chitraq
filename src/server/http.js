@@ -202,6 +202,15 @@ export function createApp(chitraq, opts = {}) {
     return found;
   });
 
+  route('GET', '/api/concepts', ({ query }) =>
+    chitraq.concepts({
+      minDocuments: query.minDocuments ? Number(query.minDocuments) : undefined,
+      limit: query.limit ? Number(query.limit) : undefined,
+    })
+  );
+
+  route('POST', '/api/concepts/propose', ({ body }) => chitraq.proposeConcepts(body ?? {}));
+
   route('GET', '/api/entities-duplicates', ({ query }) =>
     chitraq.duplicateEntities({ minScore: Number(query.minScore) || undefined })
   );

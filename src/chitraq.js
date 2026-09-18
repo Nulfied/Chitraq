@@ -24,6 +24,7 @@ import { open, tx } from './core/db.js';
 import { now } from './core/ids.js';
 import * as objects from './core/objects.js';
 import * as entities from './core/entities.js';
+import * as concepts from './core/concepts.js';
 import * as transfer from './core/transfer.js';
 import * as auth from './core/auth.js';
 import * as keys from './core/keys.js';
@@ -1651,6 +1652,98 @@ export class Chitraq {
     const incoming = await opts.exchange(outgoing);
     const result = incoming ? await this.applyChanges(incoming, { peerId: opts.peerId }) : null;
     return { sent: outgoing.objects.length + outgoing.relations.length, received: result };
+  }
+
+  // =========================================================== CONCEPTS
+
+  /**
+   * Ideas that keep recurring across your knowledge.
+   *
+   * Read-only and computed on demand. Nothing is written, because a concept is
+   * the least certain entity kind there is and creating them automatically
+   * would fill the graph with confident noise.
+   *
+   * @param {{minDocuments?: number, limit?: number}} [opts]
+   */
+  concepts(opts = {}) {
+    return concepts.candidates(this.db, { workspaceId: this.workspaceId, ...opts });
+  }
+
+  /**
+   * Turn recurring phrases into proposals a human can accept or decline.
+   *
+   * This is the only route from a phrase to an entity, and it runs through the
+   * same gateway everything else does. Suggesting is cheap; a wrong concept in
+   * the graph has to be found and merged away by hand.
+   *
+   * @param {{minDocuments?: number, limit?: number}} [opts]
+   */
+  proposeConcepts(opts = {}) {
+    const found = this.concepts(opts);
+    /** @type {any[]} */
+    const proposals = [];
+
+    for (const candidate of found) {
+      // Already suggested and already declined stays declined. Re-proposing
+      // something a person said no to is how a review queue becomes noise.
+      if (this.#conceptAlreadyKnown(candidate.phrase)) continue;
+
+      const { proposal } = gateway.propose(
+        this.db,
+        {
+          workspaceId: this.workspaceId,
+          op: gateway.Op.CreateObject,
+          confidence: candidate.confidence,
+          rationale: candidate.because,
+          payload: {
+            title: candidate.phrase,
+            body: '',
+            kind: 'entity',
+            epistemic: 'observation',
+            origin: 'algorithm',
+            attrs: {
+              entityType: entities.EntityType.Concept,
+              canonicalName: entities.canonicalise(candidate.phrase),
+              aliases: [],
+              documents: candidate.documents,
+              occurrences: candidate.occurrences,
+            },
+          },
+        },
+        // Never applied automatically, whatever the accept policy says
+        // elsewhere. This is the one place where the evidence is a statistic.
+        { autoAccept: {} },
+        this.actor
+      );
+      proposals.push(proposal);
+    }
+
+    return { found: found.length, proposals };
+  }
+
+  /**
+   * Has this phrase already been made an entity, or already been declined?
+   * @param {string} phrase
+   */
+  #conceptAlreadyKnown(phrase) {
+    const canonical = entities.canonicalise(phrase);
+
+    const existing = this.db
+      .prepare(
+        `SELECT 1 FROM object
+         WHERE workspace_id = ? AND kind = 'entity' AND lower(title) = ? AND state != 'deleted'`
+      )
+      .get(this.workspaceId, phrase.toLowerCase());
+    if (existing) return true;
+
+    const declined = this.db
+      .prepare(
+        `SELECT 1 FROM proposal
+         WHERE workspace_id = ? AND status IN ('rejected', 'pending')
+           AND payload LIKE ?`
+      )
+      .get(this.workspaceId, `%"canonicalName":"${canonical}"%`);
+    return Boolean(declined);
   }
 
   /** Peers this workspace has exchanged changes with. */
