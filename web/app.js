@@ -599,6 +599,35 @@ const views = {
         }, ['Forget']),
       ]),
 
+      // Both directions of supersession, so the chain is walkable from either
+      // end: what this replaced, and what replaced it.
+      d.supersedes?.length
+        ? h('div', {}, [
+            h('h2', {}, ['This replaced']),
+            h('div', { class: 'card' },
+              d.supersedes.map((s) =>
+                h('div', { style: 'padding:5px 0' }, [
+                  h('span', { class: 'citation', style: 'margin-left:0', onclick: () => go('object', s.id) }, [
+                    s.title,
+                  ]),
+                  h('span', { class: 'meta' }, [` — until ${s.updated_at.slice(0, 10)}`]),
+                ])
+              )
+            ),
+          ])
+        : null,
+
+      o.superseded_by
+        ? h('div', {}, [
+            h('h2', {}, ['Replaced by']),
+            h('div', { class: 'card' }, [
+              h('span', { class: 'citation', style: 'margin-left:0', onclick: () => go('object', o.superseded_by) }, [
+                'the current version',
+              ]),
+            ]),
+          ])
+        : null,
+
       d.conflicts.length
         ? h('div', {}, [
             h('h2', {}, ['Disagreements']),

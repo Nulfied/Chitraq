@@ -312,7 +312,15 @@ async function serveStatic(res, root, pathname) {
     const info = await stat(target);
     const file = info.isDirectory() ? join(target, 'index.html') : target;
     const data = await readFile(file);
-    res.writeHead(200, { 'content-type': MIME[extname(file)] ?? 'application/octet-stream' });
+    res.writeHead(200, {
+      'content-type': MIME[extname(file)] ?? 'application/octet-stream',
+      // There is no build step and no content hashing in the filenames, so a
+      // cached copy of app.js silently pins the interface to an old version.
+      // Revalidate every time: this is a local server, the files are small,
+      // and a stale UI is far more expensive than a conditional request.
+      'cache-control': 'no-cache',
+      etag: `W/"${info.size.toString(16)}-${info.mtimeMs.toString(16)}"`,
+    });
     res.end(data);
   } catch {
     try {
