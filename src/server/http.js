@@ -301,7 +301,21 @@ export function createApp(chitraq, opts = {}) {
   // There is no route that reads a key back. Storing one is write-only by
   // design: an endpoint that returns a key is an endpoint that can leak one.
 
-  route('GET', '/api/keys', () => ({ keys: chitraq.apiKeys() }));
+  route('GET', '/api/keys', () => ({
+    lock: chitraq.keyLockState(),
+    keys: chitraq.apiKeys(),
+  }));
+
+  // Unlocking over HTTP hands the passphrase to the server, which is the whole
+  // point — the server is what needs it. It is loopback-only and the passphrase
+  // is never stored, never logged and never returned.
+  route('POST', '/api/keys/unlock', ({ body }) => chitraq.unlockKeys(body.passphrase));
+
+  route('POST', '/api/keys/relock', () => chitraq.relockKeys());
+
+  route('POST', '/api/keys/lock', ({ body }) =>
+    chitraq.lockKeys({ passphrase: body.passphrase, hint: body.hint })
+  );
 
   route('POST', '/api/keys', ({ body }) =>
     chitraq.setApiKey({ provider: body.provider, key: body.key, label: body.label })

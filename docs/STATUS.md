@@ -5,7 +5,7 @@ What is actually built, what is partial, and what is deliberately not built.
 States: **IMPLEMENTED** (built and tested), **PARTIAL** (works, with a stated
 limit), **NOT BUILT** (deliberately deferred).
 
-Last updated: 2026-09-18. 264 tests passing.
+Last updated: 2026-09-18. 309 tests passing.
 
 ---
 
@@ -34,6 +34,8 @@ Last updated: 2026-09-18. 264 tests passing.
 | **Sync** | IMPLEMENTED | Divergence recorded, never silently resolved; nothing deleted by sync |
 | **Sync transport** | IMPLEMENTED | `chitraq sync <url>`; peers keyed by workspace, not address; batched, resumable |
 | **Bring-your-own API keys** | IMPLEMENTED | Per principal, AES-256-GCM at rest, write-only, live without a restart |
+| **Passphrase over keys** | IMPLEMENTED | Optional. Sealed under something that exists nowhere on disk |
+| **Concepts** | IMPLEMENTED | Found by what recurs across separate notes; always proposals, never automatic |
 
 ## Retrieval — IMPLEMENTED
 
@@ -153,6 +155,7 @@ reported on the Status screen; not automatic.
 | Ollama provider | IMPLEMENTED | Verified live — see below |
 | **Ollama vision provider** | IMPLEMENTED | Verified live with moondream. Uses whichever vision model is pulled — `ocr.image`, `vision.describe` |
 | **Whisper provider** | IMPLEMENTED | Protocol stand-in only; not run against a real engine |
+| **Scanned-PDF provider** | IMPLEMENTED | Serves `ocr.document` by delegating each page to `ocr.image` |
 | Claude provider | IMPLEMENTED | Structured outputs, refusal fallbacks, prompt caching |
 
 ### Provider verification status
@@ -191,7 +194,7 @@ reported on the Status screen; not automatic.
 | Text, Markdown, HTML, JSON, CSV | IMPLEMENTED | Front matter, headings, links, wikilinks |
 | **Folder capture** | IMPLEMENTED | Resumable, idempotent, skips machinery, states a reason for every omission |
 | **PDF** | IMPLEMENTED | Dependency-free: inflates content streams, reads text operators, extracts document info |
-| Scanned PDF | PARTIAL | Detected and reported honestly; names `ocr.document` as what would read it |
+| **Scanned PDF** | IMPLEMENTED | Page images extracted and read. Fax-encoded scans (CCITT, JBIG2) named as unreadable |
 | Encrypted PDF | PARTIAL | Detected and reported; file still captured verbatim |
 | **Images** | IMPLEMENTED | Read by a local vision model through Ollama; captured verbatim with an honest note when none is present |
 | **Audio** | IMPLEMENTED | Read by any local Whisper server; timestamps kept as evidence locators |
@@ -199,6 +202,34 @@ reported on the Status screen; not automatic.
 
 The partials are honest ones: the bytes are always stored, and the capability
 that would unlock them is named rather than silently doing nothing.
+
+### Reading scanned PDFs
+
+This corrects something this file previously claimed. It said a scanned PDF
+needed rasterising and that every route to it was a dependency Chitraq would
+not take. That is true for one kind of scan and was wrong about the common one.
+
+A PDF does not store pictures in a PDF-specific format. For `DCTDecode` — what
+almost every scanner and phone produces — the stream bytes *are* a JPEG file,
+and nothing has to be decoded to hand them to something that reads images.
+`FlateDecode` bitmaps need a PNG header wrapped round them, which is arithmetic
+and Node's zlib is already here.
+
+So `ocr.document` is served by a provider that knows nothing about models: it
+takes the file apart and asks whatever serves `ocr.image` to read each page.
+Verified end to end against moondream.
+
+**What remains true:** `CCITTFaxDecode` and `JBIG2Decode`, the bilevel fax
+encodings a photocopier produces, need real decoders. Those are named in the
+result. So are colour spaces that would need converting and bitmaps with a
+predictor — a wrong picture that looks like a picture is worse than none,
+because a model will read it and produce confident text from nothing.
+
+Two bugs in the existing parser fell out of this work, both long-standing:
+`endstream` ends in `stream`, so every stream was found twice; and the
+dictionary was located by searching back to the nearest `<<`, which finds the
+*inner* dictionary whenever one nests, so every stream with `/DecodeParms` was
+silently skipped.
 
 ### Folder capture
 
@@ -242,6 +273,7 @@ says otherwise.
 | HTTP API | IMPLEMENTED | ~50 routes, loopback-only, auth-gated once an account exists |
 | CLI | IMPLEMENTED | Works with no server |
 | Web interface | IMPLEMENTED | 11 views, light and dark |
+| **Folder watch** | IMPLEMENTED | `chitraq watch` — foreground, debounced, queued, stops with the terminal |
 | Graph visualisation | IMPLEMENTED | |
 
 ## Not built, deliberately
@@ -269,17 +301,16 @@ says otherwise.
    tuned for precision because a false "these disagree" is expensive to read.
 4. **Concurrency is SQLite WAL and nothing more.** Fine for one user and one
    process. A multi-user server needs work not yet done.
-5. **Nothing watches anything.** Sync and folder capture are commands you run,
-   not daemons that notice. No timer, no file watcher, no background exchange.
-6. **Concepts are still not resolved as entities.** People, organisations,
-   identifiers, places, products and projects are. A concept has no surface
-   shape to find it by, and guessing from capitalisation would fill the graph
-   with noise. Recurring phrases across the corpus would be the honest
-   mechanism; it is not built.
-7. **Encrypted API keys protect a leaked database, not a compromised machine.**
-   The secret lives in a file beside the store. Deriving it from the person's
-   password would be stronger and would mean keys only work while they are
-   logged in. That trade has not been made.
-8. **`ocr.document` remains empty.** A scanned PDF holds its pages as embedded
-   images, and extracting them means rasterising or decoding JPEG/JBIG2/CCITT —
-   every route is a dependency this project does not take.
+5. **Nothing watches anything unless you start it.** `chitraq watch` is a
+   foreground command that dies with the terminal. Sync has no watch mode at
+   all, and there is still no timer, no service and no background exchange.
+6. **Concepts are the weakest entity kind.** They are found by recurrence
+   across separate notes, which is honest but shallow: it finds phrases you
+   repeat, not ideas you hold. Everything it produces is a proposal, and
+   confidence is capped well below the shape-based kinds.
+7. **Fax-encoded scans still cannot be read.** `CCITTFaxDecode` and
+   `JBIG2Decode` need real decoders. Detected and named, never guessed at.
+8. **An unlocked vault lives in process memory.** Something that can read this
+   process can read the data key. Defending against that is a different order
+   of problem and is not attempted.
+9. **Video is captured but not read.** Nothing extracts its audio track.

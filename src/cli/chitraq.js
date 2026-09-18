@@ -68,6 +68,20 @@ async function main() {
     providers: config.providers,
   });
 
+  // A passphrase, if one is set and supplied. Done before any command runs,
+  // because every one of them that reaches a model needs the keys open.
+  const lock = chitraq.keyLockState();
+  if (lock.exists && process.env.CHITRAQ_PASSPHRASE) {
+    try {
+      chitraq.unlockKeys(process.env.CHITRAQ_PASSPHRASE);
+    } catch (err) {
+      console.error(`\n  ${err.message}\n`);
+      chitraq.close();
+      process.exitCode = 1;
+      return;
+    }
+  }
+
   try {
     await run(command, rest, flags, chitraq);
   } catch (err) {
@@ -226,6 +240,42 @@ async function run(command, rest, flags, c) {
     }
 
     case 'keys': {
+      if (flags.lock) {
+        const passphrase = process.env.CHITRAQ_PASSPHRASE;
+        if (!passphrase) {
+          console.log(`\n  Put the passphrase in CHITRAQ_PASSPHRASE, not on the command line:`);
+          console.log(`\n    CHITRAQ_PASSPHRASE='...' chitraq keys --lock`);
+          console.log(`\n  Nobody can recover it for you. If you lose it, the stored keys are`);
+          console.log(`  gone and you set them again \u2014 your memory itself is untouched.\n`);
+          process.exitCode = 1;
+          break;
+        }
+        const result = c.lockKeys({ passphrase, hint: flags.hint });
+        console.log(`\n  locked      ${result.resealed} key(s) re-sealed under your passphrase`);
+        console.log(`  Chitraq now needs CHITRAQ_PASSPHRASE to use them.\n`);
+        break;
+      }
+
+      if (flags.unlock) {
+        const passphrase = process.env.CHITRAQ_PASSPHRASE;
+        if (!passphrase) throw new Error('Set CHITRAQ_PASSPHRASE to remove the passphrase.');
+        const result = c.unlockKeysPermanently(passphrase);
+        console.log(`\n  unlocked    ${result.resealed} key(s) back to file-secret sealing`);
+        console.log(`  ${dim('This protects a leaked database, not a machine somebody else can read.')}\n`);
+        break;
+      }
+
+      if (flags['change-passphrase']) {
+        const current = process.env.CHITRAQ_PASSPHRASE;
+        const next = process.env.CHITRAQ_NEW_PASSPHRASE;
+        if (!current || !next) {
+          throw new Error('Set CHITRAQ_PASSPHRASE and CHITRAQ_NEW_PASSPHRASE.');
+        }
+        c.changeKeyPassphrase({ current, next, hint: flags.hint });
+        console.log(`\n  changed     the passphrase\n`);
+        break;
+      }
+
       if (flags.remove) {
         const removed = c.removeApiKey({ provider: String(flags.remove) });
         console.log(`\n  removed the ${removed.provider} key\n`);
@@ -255,6 +305,14 @@ async function run(command, rest, flags, c) {
           console.log(`  \u26a0 stored but not active: ${result.error ?? 'nothing here can use a key for that provider yet'}`);
         }
         console.log('');
+        break;
+      }
+
+      const lockState = c.keyLockState();
+      if (lockState.exists && !lockState.unlocked) {
+        console.log(`\n  These keys are behind a passphrase, and this session does not have it.`);
+        if (lockState.hint) console.log(`  hint: ${lockState.hint}`);
+        console.log(`\n    CHITRAQ_PASSPHRASE='...' chitraq keys\n`);
         break;
       }
 
@@ -770,6 +828,10 @@ function usage(code = 0) {
     --set <provider>   store a key, read from the CHITRAQ_KEY variable
     --remove <provider>  forget a stored key
     --label <text>     a name for it, so you know which key it is
+    --lock             put a passphrase over stored keys (CHITRAQ_PASSPHRASE)
+    --unlock           remove the passphrase, back to file-secret sealing
+    --change-passphrase  CHITRAQ_PASSPHRASE to CHITRAQ_NEW_PASSPHRASE
+    --hint <text>      a reminder shown when locked; never the passphrase
 
   Options for 'sync'
     --push          only send; do not take anything in

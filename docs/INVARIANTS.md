@@ -373,6 +373,35 @@ drop those rows permanently and invisibly.
 · `core/sync.js`, `chitraq.js#syncOverHttp`
 · *a batched sync says there is more, and loses nothing across rounds*
 
+**54. A key is never sealed under a secret that is not the one in force.**
+While a passphrase is set and not supplied, storing a key is refused rather
+than sealed under the file secret. The alternative is two kinds of key sitting
+side by side with no way to tell from outside which is which, half of them
+unopenable by whichever secret you have.
+· `chitraq.js#setApiKey`, `vault.describe`
+· *a key stored while unlocked is sealed under the vault, not the file*
+
+**55. Locking and unlocking never strand a key.**
+Both re-seal every stored key inside the same operation that changes the
+secret. A key belonging to neither secret cannot be recovered by anyone,
+including its owner.
+· `chitraq.js#lockKeys`, `#unlockKeysPermanently`
+· *removing the passphrase leaves the keys usable, not stranded*
+
+**56. A concept is never created without a person saying so.**
+Every other entity kind rests on a shape in the text. A concept rests on a
+statistic, so it is proposed and never applied, whatever the accept policy says
+elsewhere, and one declined is never suggested again.
+· `chitraq.js#proposeConcepts`
+· *proposing a concept writes nothing until a human accepts*
+
+**57. A file is never captured while it is still being written.**
+The watcher waits for a path's size to stop changing before handing it over.
+Reading at the first event stores a fragment as though it were the document,
+which is a corrupted memory rather than a missing one.
+· `capture/watch.js`
+· *a file still being written is not read half-finished*
+
 ---
 
 ## Changing an invariant

@@ -188,9 +188,11 @@ source permanently records which capability, provider and model produced it, and
 every claim standing on it carries that doubt. Without a provider, nothing
 changes: the bytes are stored and the gap is named.
 
-Scanned PDFs are still not readable. Their pages are embedded images, and
-getting them out means rasterising or decoding JPEG/JBIG2/CCITT — every route is
-a dependency this project does not take.
+Scanned PDFs work too. Their pages are embedded images, and for the format
+almost every scanner produces those bytes are already a JPEG — so Chitraq takes
+the file apart and reads each page with whatever reads images. Fax-encoded scans
+(`CCITTFaxDecode`, `JBIG2Decode`) still need a decoder this project does not
+have, and are named as unreadable rather than guessed at.
 
 ---
 
@@ -232,9 +234,49 @@ The CLI refuses a key given as an argument, because an argument lands in your
 shell history and in the process list, where it outlives any care taken storing
 it.
 
-This protects a leaked database, not a compromised machine — the secret sits in
-a file beside the store. Deriving it from your password would be stronger and
-would mean keys only work while you are logged in. That trade has not been made.
+By default this protects a leaked database, not a compromised machine — the
+secret sits in a file beside the store. If you want the stronger thing:
+
+```bash
+CHITRAQ_PASSPHRASE='...' chitraq keys --lock
+```
+
+Now the keys are sealed under something that exists nowhere on disk. A stolen
+laptop, a synced folder, a backup and the database itself all yield the same
+thing: ciphertext nobody can open. The cost is exactly what you would expect —
+Chitraq needs the passphrase each session, and nobody can recover it for you.
+Your memory itself is never encrypted and never at risk from this; only the API
+keys are.
+
+---
+
+## Watching a folder
+
+```bash
+chitraq watch ~/Documents/notes
+```
+
+Captures changes as you make them, printing each one. It runs in the
+foreground, installs nothing, and stops with the terminal — the thing Chitraq
+avoids is *implicit* work, not convenience. It catches up on whatever changed
+while it was away before it starts.
+
+---
+
+## Ideas that keep coming back
+
+```bash
+chitraq concepts
+chitraq concepts --propose
+```
+
+A concept is a phrase running through several *separate* pieces of knowledge. A
+phrase you wrote once is a phrase; one running through nine notes written weeks
+apart is something you think in. Counted in documents rather than occurrences,
+so one repetitive transcript proves nothing.
+
+These are never created automatically. It is the only entity kind whose
+evidence is a statistic rather than a shape, so every one waits for you.
 
 ---
 

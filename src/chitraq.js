@@ -28,6 +28,7 @@ import * as concepts from './core/concepts.js';
 import * as transfer from './core/transfer.js';
 import * as auth from './core/auth.js';
 import * as keys from './core/keys.js';
+import * as vault from './core/vault.js';
 import * as sync from './core/sync.js';
 import { httpPeer, isRemoteHost } from './core/sync-http.js';
 import * as relations from './core/relations.js';
@@ -125,8 +126,9 @@ export class Chitraq {
     /** @type {Record<string, any>} */
     this.keyedProviderOptions = opts.keyedProviderOptions ?? {};
 
-    // Whatever this person already brought, put to work immediately.
-    this.loadKeyedProviders();
+    // A passphrase makes the keys unreadable until somebody supplies it, so
+    // there is nothing to load yet and that is the correct state, not a fault.
+    if (!vault.exists(this.db)) this.loadKeyedProviders();
   }
 
   // ========================================================== BYO KEYS
@@ -196,6 +198,16 @@ export class Chitraq {
    * @param {{provider: string, key: string, label?: string}} input
    */
   setApiKey(input) {
+    // Storing a key under the file secret while a vault exists would produce a
+    // key the vault cannot open, sitting beside keys the file secret cannot —
+    // and no way to tell from the outside which is which.
+    const lock = this.keyLockState();
+    if (lock.exists && !lock.unlocked) {
+      throw new objects.ValidationError(
+        'These keys are behind a passphrase. Supply it before storing another.'
+      );
+    }
+
     const result = keys.setKey(this.db, {
       principalId: this.principal.id,
       provider: input.provider,
@@ -226,6 +238,158 @@ export class Chitraq {
       ...result,
       active: !failure && load.registered.includes(keyedIdFor(input.provider)),
       error: failure?.error ?? null,
+    };
+  }
+
+  // ----------------------------------------------------------- the vault
+
+  /**
+   * Put a passphrase over stored API keys.
+   *
+   * Everything already stored is re-sealed under the new secret in the same
+   * transaction. Doing it in two steps would leave a window where the keys
+   * belong to neither secret, and a crash inside that window loses them.
+   *
+   * @param {{passphrase: string, hint?: string}} input
+   */
+  lockKeys(input) {
+    if (vault.exists(this.db)) {
+      throw new objects.ValidationError('This memory already has a passphrase.');
+    }
+
+    // Read every key out under the current secret *before* the vault exists,
+    // because afterwards the old secret is no longer what `getKey` would use.
+    const previous = this.keySecret;
+    /** @type {Array<{provider: string, key: string, label: string|null}>} */
+    const held = [];
+    for (const stored of keys.list(this.db, this.principal.id, previous)) {
+      const plaintext = keys.getKey(this.db, {
+        principalId: this.principal.id,
+        provider: stored.provider,
+        secret: previous,
+      });
+      if (plaintext) held.push({ provider: stored.provider, key: plaintext, label: stored.label });
+    }
+
+    const secret = vault.create(this.db, input);
+    for (const item of held) {
+      keys.setKey(this.db, {
+        principalId: this.principal.id,
+        provider: item.provider,
+        key: item.key,
+        label: item.label ?? undefined,
+        secret,
+      });
+    }
+
+    this.keySecret = secret;
+    this.loadKeyedProviders();
+
+    events.emit(this.db, {
+      workspaceId: this.workspaceId,
+      type: events.EventType.CredentialChanged,
+      subjectKind: 'workspace',
+      subjectId: this.workspaceId,
+      actor: this.actor,
+      payload: { action: 'vault-created', resealed: held.length },
+    });
+
+    return { locked: true, resealed: held.length };
+  }
+
+  /**
+   * Supply the passphrase for this process.
+   *
+   * It is held in memory and nowhere else, so every process that wants to use
+   * a stored key asks again. That is the cost of the protection, not an
+   * oversight.
+   *
+   * @param {string} passphrase
+   */
+  unlockKeys(passphrase) {
+    this.keySecret = vault.open(this.db, passphrase);
+    const loaded = this.loadKeyedProviders();
+    return { unlocked: true, providers: loaded.registered, failed: loaded.failed };
+  }
+
+  /** Forget the passphrase for this process, without removing the vault. */
+  relockKeys() {
+    if (!vault.exists(this.db)) return { locked: false };
+    this.keySecret = undefined;
+    for (const provider of BUILDABLE) this.registry.unregister(keyedIdFor(provider));
+    return { locked: true };
+  }
+
+  /** @param {{current: string, next: string, hint?: string}} input */
+  changeKeyPassphrase(input) {
+    const result = vault.changePassphrase(this.db, input);
+    events.emit(this.db, {
+      workspaceId: this.workspaceId,
+      type: events.EventType.CredentialChanged,
+      subjectKind: 'workspace',
+      subjectId: this.workspaceId,
+      actor: this.actor,
+      payload: { action: 'vault-passphrase-changed' },
+    });
+    return result;
+  }
+
+  /**
+   * Remove the passphrase, returning the keys to file-secret sealing.
+   *
+   * Same care as locking: the keys are read out under the vault key and
+   * re-sealed under the file secret, or they become unreadable.
+   *
+   * @param {string} passphrase
+   */
+  unlockKeysPermanently(passphrase) {
+    const opened = vault.open(this.db, passphrase);
+
+    /** @type {Array<{provider: string, key: string, label: string|null}>} */
+    const held = [];
+    for (const stored of keys.list(this.db, this.principal.id, opened)) {
+      const plaintext = keys.getKey(this.db, {
+        principalId: this.principal.id,
+        provider: stored.provider,
+        secret: opened,
+      });
+      if (plaintext) held.push({ provider: stored.provider, key: plaintext, label: stored.label });
+    }
+
+    vault.destroy(this.db, passphrase);
+    this.keySecret = undefined;
+
+    for (const item of held) {
+      keys.setKey(this.db, {
+        principalId: this.principal.id,
+        provider: item.provider,
+        key: item.key,
+        label: item.label ?? undefined,
+      });
+    }
+    this.loadKeyedProviders();
+
+    events.emit(this.db, {
+      workspaceId: this.workspaceId,
+      type: events.EventType.CredentialChanged,
+      subjectKind: 'workspace',
+      subjectId: this.workspaceId,
+      actor: this.actor,
+      payload: { action: 'vault-removed', resealed: held.length },
+    });
+
+    return { locked: false, resealed: held.length };
+  }
+
+  /** Whether a passphrase is set, and whether this process has it. */
+  keyLockState() {
+    const described = vault.describe(this.db);
+    return {
+      ...described,
+      // Not "do I hold a secret" — a fresh process always holds the file
+      // secret, and reading that as unlocked reported every locked memory as
+      // open. It has to be *this vault's* secret.
+      unlocked: described.exists ? this.keySecret?.id === described.keyId : true,
     };
   }
 
