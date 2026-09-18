@@ -455,6 +455,45 @@ export function getRaw(db, objectId) {
 }
 
 /**
+ * Find an existing object with identical content *from the same origin*.
+ *
+ * Matching on origin as well as content is deliberate. "You wrote this" and "a
+ * model produced this" are different knowledge even when the words are
+ * identical — INVARIANT 9 — and collapsing them would quietly destroy the
+ * provenance distinction the whole system is built to keep. Two sources
+ * independently stating the same thing is corroboration, not duplication.
+ *
+ * Deleted and rejected objects are excluded: re-capturing something you
+ * deliberately removed should give you a fresh object, not silently resurrect
+ * the one you threw away.
+ *
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {{workspaceId: string, kind: string, title: string, body: string, attrs: object, origin?: string}} candidate
+ * @returns {KnowledgeObject|null}
+ */
+export function findByContent(db, candidate) {
+  if (!candidate.title?.trim()) return null;
+  const hash = contentHash({
+    kind: candidate.kind,
+    title: candidate.title,
+    body: candidate.body ?? '',
+    attrs: candidate.attrs ?? {},
+  });
+
+  const row = plain(
+    db
+      .prepare(
+        `SELECT * FROM object
+         WHERE workspace_id = ? AND content_hash = ? AND origin = ?
+           AND state IN ('active','archived') AND review != 'rejected'
+         ORDER BY created_at ASC LIMIT 1`
+      )
+      .get(candidate.workspaceId, hash, candidate.origin ?? Origin.User)
+  );
+  return row ? hydrate(row) : null;
+}
+
+/**
  * @param {import('node:sqlite').DatabaseSync} db
  * @param {string[]} ids
  * @returns {KnowledgeObject[]}

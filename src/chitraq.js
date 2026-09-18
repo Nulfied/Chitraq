@@ -19,6 +19,8 @@
 import { open, tx } from './core/db.js';
 import { now } from './core/ids.js';
 import * as objects from './core/objects.js';
+import * as entities from './core/entities.js';
+import * as transfer from './core/transfer.js';
 import * as relations from './core/relations.js';
 import * as sources from './core/sources.js';
 import * as workspaceStore from './core/workspace.js';
@@ -98,9 +100,36 @@ export class Chitraq {
    * @param {string} [input.occurredAt]
    * @param {string} [input.sourceId]
    * @param {boolean} [input.enrich] run background structuring, default true
-   * @returns {Promise<{object: any, indexed: any, enrichment: any}>}
+   * @param {boolean} [input.allowDuplicate] capture even if identical content exists
+   * @returns {Promise<{object: any, indexed: any, enrichment: any, deduplicated?: boolean}>}
    */
   async remember(input) {
+    // 0. Identical content captured twice is one piece of knowledge, not two.
+    //    Returning the original keeps its history, links and evidence intact
+    //    rather than splitting them across a duplicate nobody meant to make.
+    if (!input.allowDuplicate) {
+      const duplicate = objects.findByContent(this.db, {
+        workspaceId: this.workspaceId,
+        kind: input.kind ?? objects.Kind.Note,
+        title: input.title,
+        body: input.body ?? '',
+        attrs: input.attrs ?? {},
+        origin: input.origin ?? objects.Origin.User,
+      });
+      if (duplicate) {
+        events.emit(this.db, {
+          workspaceId: this.workspaceId,
+          type: events.EventType.KnowledgeCaptured,
+          subjectKind: 'object',
+          subjectId: duplicate.id,
+          actor: this.actor,
+          payload: { deduplicated: true, title: duplicate.title },
+        });
+        objects.touch(this.db, [duplicate.id]);
+        return { object: duplicate, indexed: null, enrichment: null, deduplicated: true };
+      }
+    }
+
     // 1. Persist first, always. Capture must never be blocked by analysis.
     const object = objects.create(
       this.db,
@@ -506,9 +535,12 @@ export class Chitraq {
     const proposals = [];
 
     const keywords = (kw?.result?.keywords ?? []).map((k) => k.term);
-    const entities = (ents?.result?.entities ?? []).filter((e) => e.confidence >= 0.7);
+    // 0.6 admits multi-word proper names (0.65) and every structured
+    // extraction, while leaving out bare single capitalised words (0.35),
+    // which are as often a month or a mis-split sentence as a name.
+    const found = (ents?.result?.entities ?? []).filter((e) => e.confidence >= 0.6);
 
-    if (keywords.length || entities.length) {
+    if (keywords.length || found.length) {
       const { proposal } = gateway.propose(
         this.db,
         {
@@ -521,7 +553,7 @@ export class Chitraq {
             objectId,
             attrs: {
               keywords,
-              entities: entities.map((e) => ({ text: e.text, type: e.type })),
+              entities: found.map((e) => ({ text: e.text, type: e.type })),
             },
           },
         },
@@ -530,6 +562,25 @@ export class Chitraq {
       );
       proposals.push(proposal);
     }
+
+    // Resolve named entities into Entity objects and link the mentions.
+    //
+    // This writes directly rather than through the gateway, and the distinction
+    // matters: it asserts no new knowledge. An Entity is a structural index
+    // over text that already exists, marked `algorithm`-origin, and a wrong one
+    // is inert — it adds a node nobody looks at. Compare a proposed *claim*,
+    // which would assert something untrue if accepted. Different risk, so a
+    // different rule.
+    const mentions = entities.linkMentions(
+      this.db,
+      {
+        workspaceId: this.workspaceId,
+        objectId,
+        entities: found,
+        minConfidence: 0.6,
+      },
+      this.actor
+    );
 
     const { similar, proposals: relationProposals } = await this.relate(objectId, { limit: 5 });
     proposals.push(...relationProposals);
@@ -562,7 +613,57 @@ export class Chitraq {
       }
     }
 
-    return { keywords, entities, similar, proposals, conflicts };
+    return { keywords, entities: found, mentions, similar, proposals, conflicts };
+  }
+
+  // ============================================================ ENTITIES
+
+  /**
+   * The people, organisations, projects and identifiers Chitraq has resolved
+   * out of your notes, most-mentioned first.
+   * @param {{entityType?: string, limit?: number}} [opts]
+   */
+  entities(opts = {}) {
+    return entities.list(this.db, { workspaceId: this.workspaceId, ...opts });
+  }
+
+  /**
+   * One entity, with everything that mentions it.
+   * @param {string} entityId
+   */
+  entity(entityId) {
+    const object = objects.get(this.db, entityId);
+    if (!object) return null;
+    return {
+      ...this.recall(entityId),
+      mentionedIn: entities.mentionedIn(this.db, entityId),
+    };
+  }
+
+  /**
+   * Entities that look like duplicates of each other. Suggestions only —
+   * merging is always an explicit decision.
+   * @param {{minScore?: number, limit?: number}} [opts]
+   */
+  duplicateEntities(opts = {}) {
+    return entities.duplicateCandidates(this.db, this.workspaceId, opts);
+  }
+
+  /**
+   * @param {string} keepId
+   * @param {string} mergeId
+   * @param {string} [reason]
+   */
+  mergeEntities(keepId, mergeId, reason) {
+    return entities.merge(this.db, { keepId, mergeId, reason }, this.actor);
+  }
+
+  /**
+   * @param {string} entityId
+   * @param {string} alias
+   */
+  addAlias(entityId, alias) {
+    return entities.addAlias(this.db, entityId, alias, this.actor);
   }
 
   // ============================================================== REVIEW
@@ -751,24 +852,36 @@ export class Chitraq {
   /**
    * Export everything as portable JSON.
    * INVARIANT: memory the user cannot take with them is not theirs.
+   * @param {{includeBlobs?: boolean}} [opts]
    */
-  export() {
-    const all = (sql) => this.db.prepare(sql).all(this.workspaceId).map((r) => ({ ...r }));
-    return {
-      format: 'chitraq/v1',
-      exportedAt: now(),
-      workspace: workspaceStore.get(this.db, this.workspaceId),
-      objects: all('SELECT * FROM object WHERE workspace_id = ?'),
-      versions: all('SELECT ov.* FROM object_version ov JOIN object o ON o.id = ov.object_id WHERE o.workspace_id = ?'),
-      relations: all('SELECT * FROM relation WHERE workspace_id = ?'),
-      relationVersions: all('SELECT rv.* FROM relation_version rv JOIN relation r ON r.id = rv.relation_id WHERE r.workspace_id = ?'),
-      sources: all('SELECT id, uri, media_type, title, byte_size, content_hash, text, meta, captured_at, origin FROM source WHERE workspace_id = ?'),
-      evidence: all('SELECT * FROM evidence WHERE workspace_id = ?'),
-      derivations: all('SELECT * FROM derivation WHERE workspace_id = ?'),
-      proposals: all('SELECT * FROM proposal WHERE workspace_id = ?'),
-      conflicts: all('SELECT * FROM conflict WHERE workspace_id = ?'),
-      events: all('SELECT * FROM event WHERE workspace_id = ?'),
-    };
+  export(opts = {}) {
+    return transfer.exportWorkspace(this.db, this.workspaceId, opts);
+  }
+
+  /**
+   * Import a workspace export, into this workspace.
+   *
+   * Ids are preserved so provenance and links survive the round trip. Anything
+   * already here is left alone; anything that would dangle is dropped with a
+   * warning rather than written broken.
+   *
+   * @param {any} payload
+   * @param {{onConflict?: 'skip'|'fail', dryRun?: boolean, reindex?: boolean}} [opts]
+   */
+  async import(payload, opts = {}) {
+    const result = transfer.importWorkspace(this.db, payload, {
+      workspaceId: this.workspaceId,
+      onConflict: opts.onConflict,
+      dryRun: opts.dryRun,
+      actor: this.actor,
+    });
+
+    // Imported objects arrive with no chunks and no vectors — the index is
+    // derived state and is not carried in the export.
+    if (!result.dryRun && opts.reindex !== false && (result.imported.objects ?? 0) > 0) {
+      await this.reindex();
+    }
+    return result;
   }
 
   // ============================================================ internals
@@ -809,4 +922,7 @@ function truncateTitle(text) {
   return oneLine.length <= 120 ? oneLine : `${oneLine.slice(0, 117)}…`;
 }
 
-export { DEFAULT_POLICY, estimateTokens, gateway, objects, relations, sources, events, indexer, context };
+export {
+  DEFAULT_POLICY, estimateTokens, gateway, objects, relations, sources,
+  events, indexer, context, entities, transfer,
+};

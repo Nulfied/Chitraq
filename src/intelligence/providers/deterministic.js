@@ -311,17 +311,26 @@ export function entities(text) {
     }
   }
 
-  // Capitalised runs that are not sentence-initial: weak proper-name signal.
-  for (const m of text.matchAll(/(?<![.!?]\s|^)\b([A-Z][\p{Ll}]+(?:\s+[A-Z][\p{Ll}]+){0,3})\b/gu)) {
-    const value = m[1].trim();
+  // Capitalised runs that are not sentence-initial: a proper-name signal.
+  //
+  // The separator is [ \t]+ and not \s+ on purpose. \s crosses newlines, so a
+  // title ending in a name followed by a body starting with the same name gets
+  // captured as one four-word "name" spanning the break.
+  for (const m of text.matchAll(/(?<![.!?]\s|^)\b([A-Z][\p{Ll}]+(?:[ \t]+(?:of|and|&|[A-Z][\p{Ll}]*)){0,3})\b/gu)) {
+    const value = m[1].trim().replace(/\s+(of|and|&)$/i, '');
     if (value.length < 3) continue;
     if (STOPISH_CAPS.has(value.toLowerCase())) continue;
+
+    const multiWord = value.includes(' ');
     const key = `name:${normalise(value)}`;
     if (!found.has(key)) {
       found.set(key, {
         text: value,
-        type: 'name',
-        confidence: value.includes(' ') ? 0.55 : 0.35,
+        type: ORG_SUFFIX.test(value) ? 'organisation' : 'name',
+        // A multi-word capitalised run mid-sentence is a fair bet. A single
+        // capitalised word is not — it is as likely to be a product, a month
+        // or the start of a clause the sentence splitter mishandled.
+        confidence: multiWord ? 0.65 : 0.35,
         offset: m.index ?? 0,
       });
     }
@@ -329,6 +338,9 @@ export function entities(text) {
 
   return [...found.values()].sort((a, b) => a.offset - b.offset);
 }
+
+/** Legal-form suffixes that reliably mark an organisation rather than a person. */
+const ORG_SUFFIX = /\b(ltd|limited|inc|llc|llp|plc|gmbh|corp|corporation|company|co|group|holdings|partners|labs|technologies|systems|foundation|university|institute)\b\.?$/i;
 
 const STOPISH_CAPS = new Set([
   'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
