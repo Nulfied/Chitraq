@@ -82,10 +82,16 @@ export function changesSince(db, opts) {
     limit
   );
 
+  // A payload that hit the row limit is a partial answer, and a partial answer
+  // that does not say so is the worst kind. The cursor still advances correctly,
+  // so syncing again fetches the next batch — but somebody has to know to do it.
+  const complete = objects.length < limit && relations.length < limit;
+
   return {
     format: SYNC_FORMAT,
     workspaceId: opts.workspaceId,
     since: opts.since ?? null,
+    complete,
     // The high-water mark the peer should send back next time. Taken from the
     // data rather than the clock, so a skewed clock cannot cause changes to be
     // skipped on the next exchange.

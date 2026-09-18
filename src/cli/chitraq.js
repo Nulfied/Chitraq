@@ -11,6 +11,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { planFolder, skipSummary, DOCUMENT_EXTENSIONS } from '../capture/folder.js';
+import { isRemoteHost } from '../core/sync-http.js';
 import { Chitraq } from '../chitraq.js';
 import { loadConfig } from '../config.js';
 import { render } from '../context/builder.js';
@@ -36,6 +37,8 @@ const COMMANDS = {
   notices: { args: '', help: 'Things worth knowing without asking.' },
   costs: { args: '', help: 'What intelligence has cost, by provider and capability.' },
   import: { args: '<file>', help: 'Import a Chitraq export into this memory.' },
+  sync: { args: '<url>', help: 'Exchange changes with another Chitraq. Use --push, --pull, --dry-run.' },
+  peers: { args: '', help: 'Machines this memory has exchanged changes with.' },
   status: { args: '', help: 'What memory holds and which intelligence is available.' },
   reindex: { args: '', help: 'Rebuild every derived index from the objects.' },
   export: { args: '', help: 'Print the whole workspace as JSON.' },
@@ -148,6 +151,74 @@ async function run(command, rest, flags, c) {
       console.log(`  proposed    ${result.proposals.length} pieces of knowledge`);
       if (result.accepted.length) console.log(`  accepted    ${result.accepted.length} automatically by policy`);
       console.log(`\n  Nothing was written to memory yet. Review with: chitraq review\n`);
+      break;
+    }
+
+    case 'sync': {
+      const url = rest[0];
+      if (!url) throw new Error('Give the address of the other Chitraq, e.g. http://192.168.1.20:4317');
+
+      const direction = flags.push ? 'push' : flags.pull ? 'pull' : 'both';
+
+      // Said out loud because it is true and because nothing else in Chitraq
+      // does it. Local-first is a promise, and this is the one command that
+      // spends it.
+      if (isRemoteHost(url) && direction !== 'pull') {
+        console.log(`\n  Sending knowledge from this memory to ${url}.`);
+      }
+
+      const report = await c.syncOverHttp(url, {
+        token: flags.token,
+        direction,
+        dryRun: !!flags['dry-run'],
+        limit: flags.limit ? Number(flags.limit) : undefined,
+        timeoutMs: flags.timeout ? Number(flags.timeout) : undefined,
+      });
+
+      console.log(`\n  peer        ${report.peer.id}`);
+      console.log(`  at          ${report.peer.url}`);
+      if (report.dryRun) console.log(`  dry run     nothing was written on either side`);
+
+      if (report.pushed) {
+        const p = report.pushed;
+        console.log(`\n  sent        ${p.objects} object(s), ${p.relations} relation(s), ${p.versions} version(s)`);
+        if (p.accepted) console.log(`  they kept   ${describeCounts(p.accepted)}`);
+        if (p.conflicts) console.log(`  \u26a0 ${p.conflicts} disagreement(s) raised on their side`);
+      }
+      if (report.pulled) {
+        const p = report.pulled;
+        console.log(`\n  received    ${p.objects} object(s), ${p.relations} relation(s)`);
+        if (p.applied) console.log(`  merged      ${describeCounts(p.applied)}`);
+        if (p.skipped && Object.keys(p.skipped).length) {
+          console.log(`  unchanged   ${describeCounts(p.skipped)}`);
+        }
+        if (p.conflicts?.length) {
+          console.log(`  \u26a0 ${p.conflicts.length} object(s) were edited on both sides`);
+          console.log(`    Your version was kept and theirs recorded. See: chitraq conflicts`);
+        }
+      }
+      if (!report.pushed && !report.pulled) console.log(`\n  nothing to exchange`);
+      if (report.more) {
+        console.log(`\n  This moved one batch, not everything. Run the same command again.`);
+      }
+      console.log('');
+      break;
+    }
+
+    case 'peers': {
+      const list = c.peers();
+      if (!list.length) {
+        console.log(`\n  This memory has never synced with another machine.`);
+        console.log(`  Start one with: chitraq sync http://<other-machine>:4317\n`);
+        break;
+      }
+      console.log('');
+      for (const peer of list) {
+        console.log(`  ${peer.id}`);
+        console.log(`    ${dim(`last contact ${peer.last_contact ?? 'never'}`)}`);
+        console.log(`    ${dim(`sent up to ${peer.last_pushed ?? '\u2014'} \u00b7 received up to ${peer.last_pulled ?? '\u2014'}`)}`);
+      }
+      console.log('');
       break;
     }
 
@@ -553,6 +624,12 @@ function usage(code = 0) {
     --why           show why each search result ranked where it did
     --context       show the context an answer was built from
 
+  Options for 'sync'
+    --push          only send; do not take anything in
+    --pull          only receive; send nothing
+    --token <t>     a session token, if the other side requires a login
+    --dry-run       report what would move, write nothing on either side
+
   Options for ingesting a folder
     --no-extract    capture the text only; do not propose knowledge (much faster)
     --include <a,b> also capture these extensions, e.g. --include json,csv
@@ -569,6 +646,7 @@ function usage(code = 0) {
     chitraq search "kind:decision sqlite after:2025-01"
     chitraq ask "why did we drop the redis cache"
     chitraq review
+    chitraq sync http://192.168.1.20:4317 --dry-run
 `);
   process.exitCode = code;
 }
@@ -670,6 +748,17 @@ async function ingestFolder(target, flags, c) {
     console.log(`  that flag when you want it turned into knowledge.`);
   }
   console.log('');
+}
+
+/**
+ * Render an applied/skipped tally, leaving out the zeroes.
+ * @param {Record<string, number>} counts
+ */
+function describeCounts(counts) {
+  const parts = Object.entries(counts ?? {})
+    .filter(([, n]) => n > 0)
+    .map(([k, n]) => `${n} ${k}`);
+  return parts.length ? parts.join(', ') : 'nothing';
 }
 
 /** @param {any} v */

@@ -244,7 +244,11 @@ export function createApp(chitraq, opts = {}) {
   );
 
   route('GET', '/api/sync/changes', ({ query }) =>
-    chitraq.changesSince({ since: query.since ?? undefined, peerId: query.peer })
+    chitraq.changesSince({
+      since: query.since ?? undefined,
+      peerId: query.peer,
+      limit: query.limit ? Number(query.limit) : undefined,
+    })
   );
 
   route('POST', '/api/sync/apply', ({ body }) =>

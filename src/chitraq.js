@@ -27,6 +27,7 @@ import * as entities from './core/entities.js';
 import * as transfer from './core/transfer.js';
 import * as auth from './core/auth.js';
 import * as sync from './core/sync.js';
+import { httpPeer, isRemoteHost } from './core/sync-http.js';
 import * as relations from './core/relations.js';
 import * as sources from './core/sources.js';
 import * as workspaceStore from './core/workspace.js';
@@ -1369,6 +1370,124 @@ export class Chitraq {
     return sync.peers(this.db, this.workspaceId);
   }
 
+  /**
+   * Sync with another Chitraq over HTTP.
+   *
+   * This is the one operation that sends your memory off this machine, so it is
+   * explicit in every direction: you name the peer, you choose whether to push,
+   * pull or both, and the result says exactly what left and what arrived.
+   * Nothing here runs on a timer.
+   *
+   * The peer is identified by its workspace id rather than its address, so a
+   * laptop reached at two different URLs is still one peer with one cursor.
+   *
+   * @param {string} url
+   * @param {object} [opts]
+   * @param {string} [opts.token]
+   * @param {'push'|'pull'|'both'} [opts.direction]  default both
+   * @param {boolean} [opts.dryRun]   nothing is written on either side
+   * @param {number} [opts.limit]    rows per batch; a big workspace takes several
+   * @param {number} [opts.timeoutMs]
+   * @param {typeof fetch} [opts.fetch]
+   * @returns {Promise<any>}
+   */
+  async syncOverHttp(url, opts = {}) {
+    const peer = httpPeer(url, {
+      token: opts.token,
+      timeoutMs: opts.timeoutMs,
+      fetch: opts.fetch,
+    });
+    const identity = await peer.identify();
+    const peerId = identity.workspaceId;
+
+    if (peerId === this.workspaceId) {
+      // Almost always a mistyped port pointing at this very server. Syncing a
+      // workspace with itself is not harmful, but it is never what was meant.
+      throw new objects.ValidationError(
+        `${peer.url} is this same workspace (${peerId}). There is nothing to exchange.`
+      );
+    }
+
+    const direction = opts.direction ?? 'both';
+    /** @type {any} */
+    const report = { peer: { id: peerId, url: peer.url }, direction, dryRun: !!opts.dryRun };
+    /** @type {any} */
+    let justSent = null;
+
+    if (direction !== 'pull') {
+      // Built against our push cursor for this peer, so a second sync with
+      // nothing new sends nothing. `changesSince` advances that cursor, which
+      // is wrong to do for a dry run.
+      const outgoing = opts.dryRun
+        ? sync.changesSince(this.db, {
+            workspaceId: this.workspaceId,
+            since: sync.cursorFor(this.db, { workspaceId: this.workspaceId, peerId, direction: 'push' }),
+            limit: opts.limit,
+          })
+        : this.changesSince({ peerId, limit: opts.limit });
+
+      const accepted = await peer.push(outgoing, { peerId: this.workspaceId, dryRun: opts.dryRun });
+      justSent = outgoing;
+      report.pushed = {
+        objects: outgoing.objects?.length ?? 0,
+        relations: outgoing.relations?.length ?? 0,
+        versions: outgoing.versions?.length ?? 0,
+        sources: outgoing.sources?.length ?? 0,
+        accepted: accepted?.applied ?? null,
+        conflicts: accepted?.conflicts?.length ?? 0,
+        complete: outgoing.complete !== false,
+      };
+    }
+
+    if (direction !== 'push') {
+      const raw = await peer.pull({ peerId: this.workspaceId, limit: opts.limit });
+
+      // On first contact the peer has no cursor for us, so it sends everything
+      // it holds — which now includes what we pushed a moment ago. Dropping our
+      // own echo makes the merge cheaper and, more importantly, makes "received
+      // 1 object" mean one object rather than one plus a reflection.
+      const incoming = justSent ? withoutEcho(raw, justSent) : raw;
+
+      const result = incoming
+        ? await this.applyChanges(incoming, { peerId, dryRun: opts.dryRun })
+        : null;
+      report.pulled = {
+        objects: incoming?.objects?.length ?? 0,
+        relations: incoming?.relations?.length ?? 0,
+        echoed: raw ? (raw.objects?.length ?? 0) - (incoming.objects?.length ?? 0) : 0,
+        applied: result?.applied ?? null,
+        skipped: result?.skipped ?? null,
+        conflicts: result?.conflicts ?? [],
+        complete: raw ? raw.complete !== false : true,
+      };
+
+      // After a complete two-way exchange both sides hold the same set: we sent
+      // everything past our mark, they sent everything past theirs. So our push
+      // mark can jump past what we just took in, and their own knowledge does
+      // not come back to them on the next sync.
+      //
+      // Only for a full exchange. After a push-only or a pull-only that
+      // reasoning does not hold, and moving the mark would skip real changes.
+      //
+      // Not when our own payload was truncated. Then there are changes behind
+      // our mark that the peer has never seen, and jumping past them would lose
+      // them quietly — the one outcome sync must never produce.
+      if (!opts.dryRun && direction === 'both' && justSent && justSent.complete !== false) {
+        const furthest = [justSent.cursor, raw?.cursor].filter(Boolean).sort().pop();
+        if (furthest) {
+          sync.recordPush(this.db, { workspaceId: this.workspaceId, peerId, cursor: furthest });
+        }
+      }
+    }
+
+    // Either side hitting its row limit means this exchange moved a batch, not
+    // everything. Saying so is the difference between "synced" and "synced as
+    // far as one call goes".
+    report.more = report.pushed?.complete === false || report.pulled?.complete === false;
+
+    return report;
+  }
+
 
   /**
    * Decide whether the free answer is good enough.
@@ -1704,6 +1823,36 @@ function round4(n) {
 }
 
 /** @param {string} text */
+
+/**
+ * Remove from an incoming payload anything identical to what we just sent.
+ *
+ * Only exact matches are dropped — same row, same content hash, same version.
+ * A row that came back *changed* is a genuine update from the peer and stays,
+ * which is what keeps this an optimisation rather than a merge rule.
+ *
+ * @param {any} incoming
+ * @param {any} sent
+ */
+function withoutEcho(incoming, sent) {
+  if (!incoming) return incoming;
+
+  const objectKeys = new Set((sent.objects ?? []).map((o) => `${o.id}:${o.content_hash}:${o.head_version}`));
+  const relationKeys = new Set((sent.relations ?? []).map((r) => `${r.id}:${r.head_version}`));
+  const versionKeys = new Set((sent.versions ?? []).map((v) => `${v.object_id}:${v.version}`));
+  const sourceKeys = new Set((sent.sources ?? []).map((x) => String(x.id)));
+
+  return {
+    ...incoming,
+    objects: (incoming.objects ?? []).filter(
+      (o) => !objectKeys.has(`${o.id}:${o.content_hash}:${o.head_version}`)
+    ),
+    relations: (incoming.relations ?? []).filter((r) => !relationKeys.has(`${r.id}:${r.head_version}`)),
+    versions: (incoming.versions ?? []).filter((v) => !versionKeys.has(`${v.object_id}:${v.version}`)),
+    sources: (incoming.sources ?? []).filter((x) => !sourceKeys.has(String(x.id))),
+  };
+}
+
 /**
  * Roughly how much text a file yielded. Shown when extraction is off, where
  * "0 proposed" would otherwise read like the file was empty.
