@@ -115,6 +115,7 @@ The CLI talks to the engine directly, so it works with no server running.
 chitraq remember "Chose SQLite because it needs no server"
 chitraq ingest notes/architecture.md      # also .pdf, .html, .csv, .json
 chitraq ingest ~/Documents/notes          # or a whole folder
+chitraq sync http://192.168.1.20:4317     # exchange with another machine
 chitraq search 'kind:decision sqlite after:2025-01'
 chitraq ask "why did we drop the redis cache"
 chitraq review                # proposals waiting for you
@@ -160,6 +161,80 @@ Nothing from a folder enters memory on its own. Files become sources, sources
 become proposals, and proposals wait for `chitraq review`. An import that says
 "24 pieces of knowledge" means twenty-four things are waiting, not twenty-four
 things you now believe.
+
+Running it again is cheap. Size and last-write time are recorded per file, so an
+untouched file is skipped before it is even opened; `--rescan` reads everything
+again when you want that.
+
+### Images and recordings
+
+Chitraq has always stored these faithfully and said, honestly, that it could not
+read them. With a local model it can:
+
+```bash
+ollama pull moondream          # or llava, llama3.2-vision
+```
+
+A photographed whiteboard, a screenshot, a scanned receipt — text out of pixels,
+on your own machine. Voice memos go to any local Whisper server:
+
+```bash
+CHITRAQ_WHISPER=http://127.0.0.1:8080 chitraq ingest standup.mp3
+```
+
+**What comes out is a reading, not the document's own words.** A model that
+misreads "38ms" as "88ms" produces text indistinguishable from a quote — so the
+source permanently records which capability, provider and model produced it, and
+every claim standing on it carries that doubt. Without a provider, nothing
+changes: the bytes are stored and the gap is named.
+
+Scanned PDFs are still not readable. Their pages are embedded images, and
+getting them out means rasterising or decoding JPEG/JBIG2/CCITT — every route is
+a dependency this project does not take.
+
+---
+
+## Two machines, one memory
+
+```bash
+chitraq sync http://192.168.1.20:4317 --dry-run   # what would move
+chitraq sync http://192.168.1.20:4317             # move it
+chitraq sync http://192.168.1.20:4317 --push      # send only
+chitraq peers                                     # who you have synced with
+```
+
+Sync is explicit in every direction. No daemon, no timer, nothing in the
+background: it happens when you run it and not otherwise, and it says out loud
+when knowledge is about to leave your machine.
+
+A peer is identified by its workspace, not its address, so a laptop reached at
+home and over a tailnet is one peer. Where both sides edited the same thing, your
+version is kept and the disagreement is raised — see `chitraq conflicts`.
+Last-writer-wins would silently destroy one of two real edits. Nothing is ever
+deleted by sync.
+
+---
+
+## Using a model Chitraq does not run
+
+```bash
+CHITRAQ_KEY=sk-ant-... chitraq keys --set anthropic
+chitraq keys
+```
+
+Your key, your bill, your choice — Chitraq never pays for your tokens and never
+holds them. Keys are sealed with AES-256-GCM before they touch the database and
+are never handed back: the listing shows a mask, the HTTP API has no route that
+reads one, and the audit log records that a key changed, not what it is. Setting
+one takes effect immediately, with no restart.
+
+The CLI refuses a key given as an argument, because an argument lands in your
+shell history and in the process list, where it outlives any care taken storing
+it.
+
+This protects a leaked database, not a compromised machine — the secret sits in
+a file beside the store. Deriving it from your password would be stronger and
+would mean keys only work while you are logged in. That trade has not been made.
 
 ---
 

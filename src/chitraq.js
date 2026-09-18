@@ -362,6 +362,10 @@ export class Chitraq {
         meta: {
           ...parsed.meta,
           filename: input.filename ?? null,
+          // Size and last-write time, so a folder captured again can tell an
+          // untouched file from a changed one without opening it. The content
+          // hash is still what decides; this only avoids the reading.
+          ...(input.fileStat ? { file: input.fileStat } : {}),
           // If the text came from a model rather than from the file, the source
           // says so permanently. Everything downstream that wants to claim
           // "quoted from your own words" can check.
@@ -516,6 +520,7 @@ export class Chitraq {
    * @param {number} [opts.limit]
    * @param {boolean} [opts.extract]    propose claims per file, default true
    * @param {boolean} [opts.keepBlob]
+   * @param {boolean} [opts.rescan]     read every file again, ignoring what is on record
    * @param {any} [opts.plan]           a plan from planFolder, to capture exactly what was shown
    * @param {(p: {index: number, total: number, file: any, outcome: string, detail?: string}) => void} [opts.onProgress]
    * @returns {Promise<{plan: any, captured: any[], duplicates: any[], failures: any[], proposed: number, accepted: number, elapsedMs: number}>}
@@ -529,13 +534,33 @@ export class Chitraq {
 
     /** @type {any[]} */ const captured = [];
     /** @type {any[]} */ const duplicates = [];
+    /** @type {any[]} */ const unchanged = [];
     /** @type {any[]} */ const failures = [];
     let proposed = 0;
     let accepted = 0;
 
+    // What this folder looked like the last time it was captured. One query,
+    // then every unchanged file costs nothing at all — which is what makes
+    // re-running a large import cheap enough to do casually.
+    const known = opts.rescan === true ? new Map() : this.#capturedFiles();
+
     for (const [i, file] of plan.files.entries()) {
       /** @type {string} */ let outcome;
       /** @type {string|undefined} */ let detail;
+
+      const seen = known.get(pathToFileURL(file.path).href);
+      if (seen && seen.bytes === file.bytes && seen.modified === file.modified) {
+        unchanged.push({ file, sourceId: seen.sourceId });
+        opts.onProgress?.({
+          index: i + 1,
+          total: plan.files.length,
+          file,
+          outcome: 'unchanged',
+          detail: 'not touched since it was captured',
+        });
+        continue;
+      }
+
       try {
         // Read as bytes, not as text. A PDF decoded as UTF-8 is convincing
         // rubbish, and rubbish that looks like text is worse than a failure.
@@ -544,6 +569,7 @@ export class Chitraq {
           bytes,
           filename: basename(file.path),
           uri: pathToFileURL(file.path).href,
+          fileStat: { bytes: file.bytes, modified: file.modified },
           extract: opts.extract,
           keepBlob: opts.keepBlob,
         });
@@ -574,11 +600,44 @@ export class Chitraq {
       plan,
       captured,
       duplicates,
+      unchanged,
       failures,
       proposed,
       accepted,
       elapsedMs: Date.now() - started,
     };
+  }
+
+  /**
+   * Every file already captured from disk, by URL, with what it looked like.
+   *
+   * Sources with no recorded size — captured before this existed, or from
+   * somewhere other than a folder walk — are simply absent, so they get read
+   * again. Degrading to the old behaviour is the right failure here.
+   *
+   * @returns {Map<string, {bytes: number, modified: string, sourceId: string}>}
+   */
+  #capturedFiles() {
+    /** @type {Map<string, any>} */
+    const out = new Map();
+    const rows = this.db
+      .prepare(
+        `SELECT id, uri, meta FROM source
+         WHERE workspace_id = ? AND uri LIKE 'file:%' ORDER BY captured_at`
+      )
+      .all(this.workspaceId);
+
+    for (const row of rows) {
+      let file;
+      try {
+        file = JSON.parse(String(row.meta ?? '{}')).file;
+      } catch {
+        continue;
+      }
+      if (!file?.modified || typeof file.bytes !== 'number') continue;
+      out.set(String(row.uri), { ...file, sourceId: String(row.id) });
+    }
+    return out;
   }
 
   // ============================================================ RETRIEVAL

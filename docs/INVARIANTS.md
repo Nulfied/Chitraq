@@ -340,6 +340,39 @@ memory and call it knowledge.
 · *a scanned PDF names the capability that would read it*
 · *an encrypted PDF says so instead of returning rubbish*
 
+**50. Text a machine read is never presented as text a person wrote.**
+When OCR or transcription supplies a source's text, the source permanently
+records `textVia` — capability, provider, model — and every claim standing on it
+carries a reduced confidence and says so in its rationale. A model that misreads
+"38ms" as "88ms" produces something indistinguishable from a quote, so the
+distinction has to live in the data rather than in anyone's memory of how the
+file got there.
+· `chitraq.js#readMedia`, `sources.capture`
+· *with a provider, an image becomes readable knowledge that knows it was read*
+
+**51. A stored API key is never handed back.**
+Keys are sealed with AES-256-GCM before they touch the database. The listing
+returns a mask and a fingerprint, the HTTP API has no route that reads one, and
+the event log records that a key changed, never the key. The plaintext exists
+only between decryption and the provider call that uses it.
+· `core/keys.js`, `server/http.js` route `/api/keys`
+· *a stored key never comes back out*
+
+**52. A key that cannot be used says so rather than looking absent.**
+A key sealed under a secret this installation no longer has is listed, marked
+unreadable, and refused loudly. Reporting "no key configured" would route the
+request somewhere cheaper while the person believes theirs is in use.
+· `keys.getKey`, `keys.list`
+· *a key sealed under a different secret says so instead of looking absent*
+
+**53. Sync never advances a cursor past changes the peer has not received.**
+`changesSince` truncates at a row limit, and the payload says so. The push mark
+only jumps after a complete two-way exchange of a complete payload; after a
+truncated one it stays, and the caller is told there is more. Moving it would
+drop those rows permanently and invisibly.
+· `core/sync.js`, `chitraq.js#syncOverHttp`
+· *a batched sync says there is more, and loses nothing across rounds*
+
 ---
 
 ## Changing an invariant

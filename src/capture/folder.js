@@ -52,6 +52,7 @@ export const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
  * @property {string} relative   path relative to the root, for display
  * @property {number} bytes
  * @property {string} mediaType
+ * @property {string} modified   last-write time, for noticing a file has not changed
  */
 
 /**
@@ -177,6 +178,7 @@ export async function planFolder(root, opts = {}) {
         path: full,
         relative: shown,
         bytes: info.size,
+        modified: info.mtime.toISOString(),
         mediaType: guessMediaType(entry.name) ?? 'text/plain',
       });
     }

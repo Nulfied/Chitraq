@@ -5,7 +5,7 @@ What is actually built, what is partial, and what is deliberately not built.
 States: **IMPLEMENTED** (built and tested), **PARTIAL** (works, with a stated
 limit), **NOT BUILT** (deliberately deferred).
 
-Last updated: 2026-09-18. 211 tests passing.
+Last updated: 2026-09-18. 264 tests passing.
 
 ---
 
@@ -29,9 +29,11 @@ Last updated: 2026-09-18. 211 tests passing.
 | Workspaces, principals, grants | IMPLEMENTED | Single-user bootstrap is automatic |
 | Export | IMPLEMENTED | Full workspace, checksummed |
 | **Import** | IMPLEMENTED | Ids preserved; never overwrites; dangling rows dropped with warnings; dry run |
-| **Entity resolution** | IMPLEMENTED | Exact match resolves silently; anything weaker is suggested; merge re-points edges and supersedes |
+| **Entity resolution** | IMPLEMENTED | People, organisations, identifiers, **places, products, projects**. Exact match resolves silently; anything weaker is suggested |
 | **Authentication** | IMPLEMENTED | Off until an account exists. scrypt, hashed tokens, constant-time compare |
 | **Sync** | IMPLEMENTED | Divergence recorded, never silently resolved; nothing deleted by sync |
+| **Sync transport** | IMPLEMENTED | `chitraq sync <url>`; peers keyed by workspace, not address; batched, resumable |
+| **Bring-your-own API keys** | IMPLEMENTED | Per principal, AES-256-GCM at rest, write-only, live without a restart |
 
 ## Retrieval — IMPLEMENTED
 
@@ -148,7 +150,9 @@ reported on the Status screen; not automatic.
 | **Budget enforcement** | IMPLEMENTED | Checked at selection; running out degrades intelligence, never memory |
 | **Cost reporting** | IMPLEMENTED | By provider, capability and day |
 | Deterministic provider (11 capabilities) | IMPLEMENTED | |
-| Ollama provider | IMPLEMENTED | Verified against a protocol stand-in — see below |
+| Ollama provider | IMPLEMENTED | Verified live — see below |
+| **Ollama vision provider** | IMPLEMENTED | Verified live with moondream — `ocr.image`, `vision.describe` |
+| **Whisper provider** | IMPLEMENTED | Protocol stand-in only; not run against a real engine |
 | Claude provider | IMPLEMENTED | Structured outputs, refusal fallbacks, prompt caching |
 
 ### Provider verification status
@@ -165,6 +169,16 @@ reported on the Status screen; not automatic.
   correct answer, cites the source it used, and still reports `grounded: false`.
   The adapter now believes the answer over the flag, and strips the bracket
   wrapping the model copies from the prompt.
+- **Ollama vision** — **verified against a live endpoint** (moondream). Given a
+  PNG of a whiteboard reading "SHIP IN MARCH / P99 38 MS", it returned
+  `"Ship in march 38 ms"` — the words, minus "P99", with the case normalised.
+  That is a fair picture of what a 1.8 GB model on a CPU does, and exactly why
+  everything it produces is marked as a reading rather than a quote. 33 s cold,
+  3.7 s warm on the i7-8550U.
+- **Whisper** — covered by a stand-in server speaking the OpenAI-compatible
+  transcription API: request shape, multipart body, error paths, result mapping.
+  **Not run against a real engine**, because none is installed here. It should
+  not be read as claiming more than that.
 - **Claude** — written against the current Messages API (structured outputs via
   `output_config.format`, server-side refusal fallbacks, prompt caching on the
   system block). Structurally exercised by the router's tests; **not run against
@@ -179,8 +193,9 @@ reported on the Status screen; not automatic.
 | **PDF** | IMPLEMENTED | Dependency-free: inflates content streams, reads text operators, extracts document info |
 | Scanned PDF | PARTIAL | Detected and reported honestly; names `ocr.document` as what would read it |
 | Encrypted PDF | PARTIAL | Detected and reported; file still captured verbatim |
-| Images | PARTIAL | Captured; `ocr.image` / `vision.describe` declared with no provider |
-| Audio and video | PARTIAL | Captured; `speech.transcribe` declared with no provider |
+| **Images** | IMPLEMENTED | Read by a local vision model through Ollama; captured verbatim with an honest note when none is present |
+| **Audio** | IMPLEMENTED | Read by any local Whisper server; timestamps kept as evidence locators |
+| Video | PARTIAL | Captured; no provider extracts its audio track |
 
 The partials are honest ones: the bytes are always stored, and the capability
 that would unlock them is named rather than silently doing nothing.
@@ -206,11 +221,15 @@ Every omission carries a reason (`ignored-directory`, `hidden`, `symbolic-link`,
 `unsupported-type`, `too-large`, `empty`, `unreadable`), summarised by count, so
 "where is my note?" is answerable without reading the source.
 
-**Known limit — no change detection.** An edited file is captured again as a new
-source rather than recognised as a revision of the old one. Identical claims
-deduplicate at the object level, so this does not produce visible duplicates,
-but it does mean re-reading files that have not changed. Storing path, size and
-mtime would fix it; that state has not earned its place yet.
+Re-running is cheap: size and last-write time are recorded with each captured
+file, so an untouched file is skipped before it is opened. The content hash is
+still what decides — this only avoids the reading. `--rescan` ignores the record
+when you want everything read again.
+
+**Known limit — an edit is a new source, not a revision.** A changed file is
+captured again rather than recognised as a new version of the old one. Identical
+claims deduplicate at the object level, so no visible duplicates appear, but the
+two captures are not linked as a history.
 
 **Not exposed over HTTP.** The route would have to either stream progress or
 block for an hour, and a bulk import belongs on the command line until real use
@@ -250,9 +269,17 @@ says otherwise.
    tuned for precision because a false "these disagree" is expensive to read.
 4. **Concurrency is SQLite WAL and nothing more.** Fine for one user and one
    process. A multi-user server needs work not yet done.
-5. **Sync has no transport.** `changesSince` produces a payload and
-   `applyChanges` consumes one; moving it between machines is left to the caller.
-   Folder capture has no watch mode either: it is a command you run, not a
-   daemon that notices.
-6. **Entity resolution only handles people, organisations and identifiers.**
-   Places, products and concepts are extracted as attributes, not resolved.
+5. **Nothing watches anything.** Sync and folder capture are commands you run,
+   not daemons that notice. No timer, no file watcher, no background exchange.
+6. **Concepts are still not resolved as entities.** People, organisations,
+   identifiers, places, products and projects are. A concept has no surface
+   shape to find it by, and guessing from capitalisation would fill the graph
+   with noise. Recurring phrases across the corpus would be the honest
+   mechanism; it is not built.
+7. **Encrypted API keys protect a leaked database, not a compromised machine.**
+   The secret lives in a file beside the store. Deriving it from the person's
+   password would be stronger and would mean keys only work while they are
+   logged in. That trade has not been made.
+8. **`ocr.document` remains empty.** A scanned PDF holds its pages as embedded
+   images, and extracting them means rasterising or decoding JPEG/JBIG2/CCITT —
+   every route is a dependency this project does not take.

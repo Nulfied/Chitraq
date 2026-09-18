@@ -136,9 +136,11 @@ test('ingestFolder captures, then skips what it already has', async (t) => {
   assert.equal(first.failures.length, 0);
 
   // The re-run property is the one that makes "press Ctrl-C whenever" true.
+  // Unchanged files are now recognised from size and mtime, so they are
+  // skipped before being opened rather than read and then deduplicated.
   const second = await c.ingestFolder(root, { extract: false });
   assert.equal(second.captured.length, 0);
-  assert.equal(second.duplicates.length, 3);
+  assert.equal(second.unchanged.length, 3);
 
   // And the text actually landed, rather than the files merely being counted.
   const found = await c.search('sqlite needs no server', { semantic: false });
@@ -221,4 +223,48 @@ test('the default extension list is documents, not data', () => {
   for (const wanted of ['md', 'txt', 'pdf', 'html']) {
     assert.ok(DOCUMENT_EXTENSIONS.includes(wanted));
   }
+});
+
+test('a file that has not changed is not read again', async (t) => {
+  const root = await fixture();
+  const c = new Chitraq({ path: ':memory:' });
+  t.after(async () => {
+    c.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const first = await c.ingestFolder(root, { extract: false });
+  assert.equal(first.captured.length, 3);
+  assert.equal(first.unchanged.length, 0, 'nothing on record yet');
+
+  const second = await c.ingestFolder(root, { extract: false });
+  assert.equal(second.unchanged.length, 3, 'size and mtime matched');
+  assert.equal(second.captured.length, 0);
+  // The point of the change: they were skipped before being opened, so the
+  // content hash never had to be computed at all.
+  assert.equal(second.duplicates.length, 0, 'not even reached the dedup check');
+
+  // Touching one brings it back into the run.
+  await writeFile(join(root, 'architecture.md'), '# Architecture\n\nWe moved to Postgres.\n');
+  const third = await c.ingestFolder(root, { extract: false });
+  assert.equal(third.unchanged.length, 2);
+  assert.equal(third.captured.length, 1, 'the edited file was read');
+  assert.equal(third.captured[0].file.relative, 'architecture.md');
+});
+
+test('--rescan reads everything again, on purpose', async (t) => {
+  const root = await fixture();
+  const c = new Chitraq({ path: ':memory:' });
+  t.after(async () => {
+    c.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  await c.ingestFolder(root, { extract: false });
+  const again = await c.ingestFolder(root, { extract: false, rescan: true });
+
+  assert.equal(again.unchanged.length, 0, 'the record was ignored');
+  // Read, hashed, and recognised as identical. Nothing duplicated.
+  assert.equal(again.duplicates.length, 3);
+  assert.equal(again.captured.length, 0);
 });

@@ -32,7 +32,7 @@ const COMMANDS = {
   conflicts: { args: '', help: 'Disagreements Chitraq has noticed.' },
   forget: { args: '<id>', help: 'Remove from retrieval, keeping history.' },
   erase: { args: '<id> <reason...>', help: 'Irreversibly destroy an object and its history.' },
-  entities: { args: '', help: 'People, organisations and identifiers found in your notes.' },
+  entities: { args: '', help: 'People, places, products and projects found in your notes.' },
   merge: { args: '<keepId> <mergeId>', help: 'Merge two entities into one.' },
   notices: { args: '', help: 'Things worth knowing without asking.' },
   costs: { args: '', help: 'What intelligence has cost, by provider and capability.' },
@@ -696,6 +696,7 @@ function usage(code = 0) {
     --no-recursive  only the folder itself
     --hidden        include dotfiles and dot-folders
     --max-mb <n>    skip files larger than this (default 10)
+    --rescan        read every file again, even ones that have not changed
 
   Examples
     chitraq remember "Chose SQLite because it needs no server"
@@ -733,6 +734,7 @@ async function ingestFolder(target, flags, c) {
     limit: flags.limit ? Number(flags.limit) : undefined,
     maxBytes: flags['max-mb'] ? Number(flags['max-mb']) * 1024 * 1024 : undefined,
     extract: !flags['no-extract'],
+    rescan: !!flags.rescan,
   };
 
   const plan = await planFolder(target, opts);
@@ -782,6 +784,9 @@ async function ingestFolder(target, flags, c) {
   });
 
   console.log(`\n  captured    ${result.captured.length} new`);
+  if (result.unchanged.length) {
+    console.log(`  untouched   ${result.unchanged.length} not modified since last time (not re-read)`);
+  }
   if (result.duplicates.length) console.log(`  unchanged   ${result.duplicates.length} already in memory`);
   if (result.failures.length) {
     console.log(`  failed      ${result.failures.length}`);
