@@ -13,6 +13,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { anthropicProvider } from './intelligence/providers/anthropic.js';
 import { ollamaProvider } from './intelligence/providers/ollama.js';
+import { ollamaVisionProvider } from './intelligence/providers/ollama-vision.js';
+import { whisperProvider } from './intelligence/providers/whisper.js';
 
 /**
  * @returns {{path: string, host: string, port: number, policy: object, providers: any[], notes: string[]}}
@@ -37,6 +39,30 @@ export function loadConfig(env = process.env) {
       })
     );
     notes.push('Ollama provider registered (used automatically if it is running with the needed models).');
+
+    // Registered separately because it is a separate model that is separately
+    // absent. Its health check asks for the vision model by name, so a machine
+    // with only llama3.2 pulled routes images nowhere, which is correct.
+    providers.push(
+      ollamaVisionProvider({
+        baseUrl: env.OLLAMA_HOST || 'http://127.0.0.1:11434',
+        model: env.CHITRAQ_OLLAMA_VISION || 'llava',
+      })
+    );
+  }
+
+  // Speech needs a server somebody chose to run, so it is opt-in by address
+  // rather than assumed on a default port. Nothing is guessed here.
+  if (env.CHITRAQ_WHISPER) {
+    providers.push(
+      whisperProvider({
+        baseUrl: env.CHITRAQ_WHISPER,
+        model: env.CHITRAQ_WHISPER_MODEL,
+        apiKey: env.CHITRAQ_WHISPER_KEY,
+        language: env.CHITRAQ_WHISPER_LANG,
+      })
+    );
+    notes.push(`Whisper provider registered at ${env.CHITRAQ_WHISPER}.`);
   }
 
   if (env.ANTHROPIC_API_KEY) {

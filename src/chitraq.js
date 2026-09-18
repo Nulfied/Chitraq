@@ -208,6 +208,11 @@ export class Chitraq {
   async ingest(input) {
     const parsed = parseSource(input);
 
+    // An image or a recording arrives here with no text and a named capability
+    // that would change that. If something serves it, this is where captured
+    // bytes become readable knowledge.
+    const reading = await this.#readMedia(parsed, input);
+
     const { source, deduplicated } = sources.capture(
       this.db,
       {
@@ -217,17 +222,24 @@ export class Chitraq {
         title: input.title ?? parsed.title ?? input.filename ?? null,
         text: parsed.text,
         blob: input.keepBlob ? input.bytes : undefined,
-        meta: { ...parsed.meta, filename: input.filename ?? null },
+        meta: {
+          ...parsed.meta,
+          filename: input.filename ?? null,
+          // If the text came from a model rather than from the file, the source
+          // says so permanently. Everything downstream that wants to claim
+          // "quoted from your own words" can check.
+          ...(reading ? { textVia: reading.via } : {}),
+        },
         origin: 'source',
       },
       this.actor
     );
 
     if (deduplicated) {
-      return { source, parsed, proposals: [], accepted: [], deduplicated: true };
+      return { source, parsed, proposals: [], accepted: [], deduplicated: true, reading };
     }
     if (input.extract === false || !parsed.text.trim()) {
-      return { source, parsed, proposals: [], accepted: [], deduplicated: false };
+      return { source, parsed, proposals: [], accepted: [], deduplicated: false, reading };
     }
 
     // Extraction is a capability call. With no model configured this is the
@@ -251,8 +263,16 @@ export class Chitraq {
           workspaceId: this.workspaceId,
           runId: run?.run?.id,
           op: gateway.Op.CreateObject,
-          confidence: claim.confidence,
-          rationale: `Extracted from "${source.title ?? source.uri ?? 'captured source'}"`,
+          // A claim read out of a transcription rests on two models, not one.
+          // Carrying the full doubt forward is the only honest arithmetic:
+          // a confident reading of a misheard sentence is still wrong.
+          confidence: reading
+            ? Math.round(claim.confidence * READING_DISCOUNT * 100) / 100
+            : claim.confidence,
+          rationale: reading
+            ? `Extracted from "${source.title ?? source.uri ?? 'captured source'}", ` +
+              `whose text was read by ${reading.via.provider} rather than written`
+            : `Extracted from "${source.title ?? source.uri ?? 'captured source'}"`,
           payload: {
             title: truncateTitle(claim.text),
             body: claim.text,
@@ -277,7 +297,62 @@ export class Chitraq {
       if (a.kind === 'object') await this.#index(objects.get(this.db, a.id));
     }
 
-    return { source, parsed, proposals, accepted, deduplicated: false };
+    return { source, parsed, proposals, accepted, deduplicated: false, reading };
+  }
+
+  /**
+   * Turn bytes nobody can read into text, if something can.
+   *
+   * Capture never depends on this working. A vision model that is missing, slow
+   * or wrong leaves exactly what Chitraq did before: the bytes stored verbatim
+   * and an honest note that reading them needs a capability nobody serves. That
+   * is the whole reason the slots were declared empty rather than hidden.
+   *
+   * Mutates `parsed` in place when it succeeds, because the text genuinely is
+   * the source's text from here on — with a permanent record of where it came
+   * from, which is the part that must not be lost.
+   *
+   * @param {any} parsed
+   * @param {any} input
+   * @returns {Promise<{via: any, result: any}|null>}
+   */
+  async #readMedia(parsed, input) {
+    if (!parsed.needsCapability || parsed.text?.trim()) return null;
+    if (!input.bytes?.length) return null;
+    if (input.read === false) return null;
+
+    // No provider for this slot is the normal case, not an error.
+    if (!this.registry.supporting(parsed.needsCapability).length) return null;
+
+    const run = await this.router.tryRun(
+      parsed.needsCapability,
+      {
+        bytes: input.bytes,
+        mediaType: parsed.mediaType,
+        filename: input.filename ?? null,
+      },
+      { workspaceId: this.workspaceId }
+    );
+
+    const text = String(run?.result?.text ?? '').trim();
+    if (!text) return null;
+
+    const via = {
+      capability: parsed.needsCapability,
+      provider: run.run?.provider ?? 'unknown',
+      model: run.result?.model ?? null,
+      at: now(),
+    };
+
+    parsed.text = text;
+    parsed.readBy = via;
+    parsed.uncertainty = run.result?.uncertainty ?? null;
+    // The slot is served now, so the honest report changes from "nobody can
+    // read this" to "this was read, by a machine".
+    parsed.needsCapability = null;
+    if (run.result?.segments?.length) parsed.meta = { ...parsed.meta, segments: run.result.segments };
+
+    return { via, result: run.result };
   }
 
   /**
@@ -1823,6 +1898,16 @@ function round4(n) {
 }
 
 /** @param {string} text */
+
+/**
+ * How much doubt a machine reading adds.
+ *
+ * Not tuned — chosen. The point is not the exact number, it is that a claim
+ * standing on a transcription cannot be as trustworthy as the same claim
+ * standing on text somebody typed, and the system should never present them as
+ * equal.
+ */
+const READING_DISCOUNT = 0.75;
 
 /**
  * Remove from an incoming payload anything identical to what we just sent.
