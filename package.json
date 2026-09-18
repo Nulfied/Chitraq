@@ -1,0 +1,21 @@
+{
+  "name": "chitraq",
+  "version": "0.1.0",
+  "description": "Chitraq — the memory engine for everyone. One memory, many intelligences.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "bin": {
+    "chitraq": "./src/cli/chitraq.js"
+  },
+  "scripts": {
+    "start": "node src/server/serve.js",
+    "cli": "node src/cli/chitraq.js",
+    "test": "node --test --test-concurrency=1 \"test/*.test.js\"",
+    "check": "node --check src/server/serve.js"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

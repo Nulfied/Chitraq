@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "chitraq-demo",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "src/server/serve.js",
+        "--db",
+        "demo/memory.chitraq"
+      ],
+      "port": 4317
+    },
+    {
+      "name": "chitraq",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "src/server/serve.js"
+      ],
+      "port": 4317
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+node_modules/
+*.log
+.DS_Store
+data/
+*.chitraq
+*.chitraq-shm
+*.chitraq-wal
+.env
+.env.*
+!.env.example
