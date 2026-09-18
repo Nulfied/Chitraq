@@ -94,6 +94,47 @@ export function extractPdfText(bytes) {
   };
 }
 
+
+/**
+ * The dictionary that belongs to the stream starting at `index`.
+ *
+ * Taking the text back to the nearest `<<` is wrong whenever a dictionary
+ * contains another one — `/DecodeParms << /Predictor 12 >>` is ordinary in a
+ * scanned PDF — because the nearest `<<` is then the inner dictionary, and the
+ * object's own keys are invisible. Every such stream was being skipped.
+ *
+ * This walks backwards balancing the pairs, so it lands on the opening of the
+ * outermost dictionary regardless of how deeply it nests.
+ *
+ * @param {string} raw
+ * @param {number} index  position of the `stream` keyword
+ * @returns {string}
+ */
+export function dictBefore(raw, index) {
+  let depth = 0;
+  let i = index;
+  while (i >= 2) {
+    const pair = raw.charCodeAt(i - 1) === 0x3e && raw.charCodeAt(i - 2) === 0x3e; // >>
+    const open = raw.charCodeAt(i - 1) === 0x3c && raw.charCodeAt(i - 2) === 0x3c; // <<
+    if (pair) {
+      depth++;
+      i -= 2;
+      continue;
+    }
+    if (open) {
+      // Decrement first. The `>>` just before the keyword is the dictionary's
+      // own close, so its matching `<<` is the one that brings the count back
+      // to zero — checking before decrementing can never reach it.
+      depth--;
+      if (depth === 0) return raw.slice(i - 2, index);
+      i -= 2;
+      continue;
+    }
+    i--;
+  }
+  return raw.slice(Math.max(0, raw.lastIndexOf('<<', index)), index);
+}
+
 /**
  * Pull out and decompress every stream object.
  * @param {Buffer} buf
@@ -102,17 +143,21 @@ export function extractPdfText(bytes) {
 function extractStreams(buf, raw) {
   /** @type {Array<{data: Buffer, unsupported?: boolean}>} */
   const out = [];
-  const marker = /stream\r?\n/g;
+  const marker = /(?<![A-Za-z])stream\r?\n/g;
   let m;
 
+  // The lookbehind above matters: `endstream` ends in `stream`, so without it
+  // every stream is found twice — once properly, and once three bytes into its
+  // own terminator, where the dictionary lookup then reports the *previous*
+  // object's filter. That inflated the count of unsupported streams and made
+  // readable PDFs look partly unreadable.
   while ((m = marker.exec(raw)) !== null) {
     const start = m.index + m[0].length;
     const end = raw.indexOf('endstream', start);
     if (end < 0) continue;
 
     // The dictionary immediately before `stream` declares the filter.
-    const dictStart = Math.max(0, raw.lastIndexOf('<<', m.index));
-    const dict = raw.slice(dictStart, m.index);
+    const dict = dictBefore(raw, m.index);
 
     let data = buf.subarray(start, end);
     // Trailing EOL before `endstream` is delimiter, not content.

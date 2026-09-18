@@ -37,6 +37,7 @@ import { Registry, Capability } from './intelligence/registry.js';
 import { Router, DEFAULT_POLICY, runHistory, measuredLatency } from './intelligence/router.js';
 import { deterministicProvider, EMBED_MODEL } from './intelligence/providers/deterministic.js';
 import { providerFromKey, keyedIdFor, BUILDABLE } from './intelligence/providers/from-key.js';
+import { pdfOcrProvider } from './intelligence/providers/pdf-ocr.js';
 import * as gateway from './intelligence/gateway.js';
 import * as budget from './intelligence/budget.js';
 import * as indexer from './retrieval/indexer.js';
@@ -79,6 +80,22 @@ export class Chitraq {
     for (const p of opts.providers ?? []) this.registry.register(p);
 
     this.router = new Router({ registry: this.registry, db: this.db, policy: opts.policy });
+
+    // Reading a scanned PDF is reading its pictures, so this is registered
+    // after the router exists and delegates straight back through it. It
+    // becomes available the moment anything can read an image, and unavailable
+    // again when nothing can — no configuration either way.
+    this.registry.register(
+      pdfOcrProvider({
+        canReadImages: () => this.registry.supporting(Capability.OcrImage).length > 0,
+        readImage: async (task) => {
+          const run = await this.router.run(Capability.OcrImage, task, {
+            workspaceId: this.workspaceId,
+          });
+          return run.result;
+        },
+      })
+    );
     this.acceptPolicy = opts.acceptPolicy ?? gateway.DEFAULT_ACCEPT_POLICY;
 
     const boot = workspaceStore.bootstrap(this.db);
