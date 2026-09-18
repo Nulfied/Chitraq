@@ -490,3 +490,15 @@ svg.graph text { font-size: 10px; fill: var(--text-2); pointer-events: none; }
   background: var(--source-soft);
 }
 .card.notice-card .title { font-weight: 500; }
+
+/* How an answer was produced — shown above every answer, never hidden. */
+.how-answered {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.how-answered .meta { font-size: 12.5px; }

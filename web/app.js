@@ -132,13 +132,15 @@ const views = {
       autofocus: 'true',
     });
 
-    async function submit() {
+    async function submit(escalate) {
       const question = input.value.trim();
       if (!question) return;
-      results.replaceChildren(h('div', { class: 'spinner' }, ['Searching memory…']));
+      results.replaceChildren(
+        h('div', { class: 'spinner' }, [escalate ? 'Asking a model…' : 'Searching memory…'])
+      );
       try {
-        const a = await api.post('/ask', { question });
-        results.replaceChildren(answerView(a));
+        const a = await api.post('/ask', { question, escalate: escalate ? 'always' : undefined });
+        results.replaceChildren(answerView(a, () => submit(true)));
       } catch (err) {
         results.replaceChildren(h('div', { class: 'notice' }, [String(err.message)]));
       }
@@ -154,7 +156,7 @@ const views = {
       h('form', {
         class: 'row',
         style: 'margin-bottom:18px',
-        onsubmit: (e) => { e.preventDefault(); submit(); },
+        onsubmit: (e) => { e.preventDefault(); submit(false); },
       }, [
         input,
         h('button', { class: 'btn primary', style: 'flex:0 0 auto', type: 'submit' }, ['Ask']),
@@ -905,9 +907,35 @@ const views = {
 
 // ------------------------------------------------------------ components
 
-/** @param {any} a */
-function answerView(a) {
+/**
+ * @param {any} a
+ * @param {() => void} [onEscalate]
+ */
+function answerView(a, onEscalate) {
   const nodes = [];
+
+  // How this answer was produced, in the user's terms rather than ours.
+  // "Your own words" is a feature, not an apology: it means nothing was
+  // generated, nothing could be invented, and it cost nothing.
+  const how = a.cached
+    ? { label: 'from an earlier answer', detail: 'Nothing changed in the material behind it.' }
+    : a.escalated
+      ? { label: `written by ${a.provider}`, detail: a.ladder?.reason }
+      : a.grounded
+        ? { label: 'quoted from your own words', detail: a.ladder?.reason }
+        : { label: 'not found in memory', detail: a.ladder?.reason };
+
+  nodes.push(
+    h('div', { class: 'how-answered' }, [
+      h('span', { class: `badge ${a.escalated ? 'origin-ai' : 'confirmed'}` }, [how.label]),
+      how.detail ? h('span', { class: 'meta' }, [how.detail]) : null,
+      a.ladder?.canEscalate && onEscalate
+        ? h('button', { class: 'btn quiet', style: 'margin-left:auto', onclick: onEscalate }, [
+            'Ask a model instead',
+          ])
+        : null,
+    ])
+  );
 
   if (a.grounded) {
     nodes.push(

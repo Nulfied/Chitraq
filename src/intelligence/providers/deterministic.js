@@ -17,7 +17,7 @@
 
 import { Capability } from '../registry.js';
 import {
-  contentTerms, tokenize, sentences, charNgrams, termFrequency,
+  contentTerms, matchTerms, tokenize, sentences, charNgrams, termFrequency,
   lexicalSimilarity, estimateTokens, normalise,
 } from '../../core/text.js';
 import { parse } from '../../retrieval/query.js';
@@ -480,13 +480,15 @@ export function summarize(text, maxSentences = 3) {
  */
 export function extractiveAnswer(task) {
   const question = task.question ?? '';
-  const queryTerms = new Set(contentTerms(question));
+  // Stemmed, so "why did we drop redis" matches a note that says "we dropped".
+  const queryTerms = new Set(matchTerms(question));
   const context = task.context ?? [];
 
   if (!context.length) {
     return {
       answer: null,
       grounded: false,
+      confidence: 0,
       passages: [],
       uncertainty: 'Nothing in memory matched this question.',
       method: 'extractive',
@@ -498,20 +500,30 @@ export function extractiveAnswer(task) {
 
   for (const item of context) {
     const superseded = item.state === 'superseded' || item.state === 'archived';
+
+    // The title is part of what a passage says. A note titled "Engineering
+    // headcount" whose body reads "the team is fifteen people" answers "what is
+    // the engineering headcount" completely — but only if the title counts.
+    const titleTerms = new Set(matchTerms(item.title ?? ''));
+
     for (const sentence of sentences(item.text ?? '')) {
-      const terms = contentTerms(sentence);
+      const terms = matchTerms(sentence);
       if (terms.length < 3) continue;
-      let overlap = 0;
-      for (const t of terms) if (queryTerms.has(t)) overlap++;
-      if (!overlap) continue;
+
+      const matched = new Set();
+      for (const t of terms) if (queryTerms.has(t)) matched.add(t);
+      for (const t of titleTerms) if (queryTerms.has(t)) matched.add(t);
+      if (!matched.size) continue;
+
       // Normalise by query size, not sentence size, so a long informative
       // sentence is not penalised for also saying other things.
-      const score = overlap / Math.max(queryTerms.size, 1);
+      const score = matched.size / Math.max(queryTerms.size, 1);
       passages.push({
         objectId: item.id,
         title: item.title,
         text: sentence.trim(),
         score: round(score),
+        matched: [...matched],
         superseded,
       });
     }
@@ -540,6 +552,7 @@ export function extractiveAnswer(task) {
     return {
       answer: null,
       grounded: false,
+      confidence: passages.length ? round(passages[0].score * 0.5) : 0,
       passages: passages.slice(0, 3),
       uncertainty:
         'Memory contains related material but nothing that answers this directly. ' +
@@ -553,6 +566,7 @@ export function extractiveAnswer(task) {
   return {
     answer: best.map((p) => p.text).join(' '),
     grounded: true,
+    confidence: extractiveConfidence(best, queryTerms),
     passages: best,
     alsoFound: alsoReplaced,
     citations: [...new Set(best.map((p) => p.objectId))],
@@ -567,6 +581,44 @@ export function extractiveAnswer(task) {
         : ''),
     method: 'extractive',
   };
+}
+
+
+/**
+ * How much to trust an extractive answer.
+ *
+ * This is what decides whether a paid model gets called, so it measures the
+ * two things that actually predict a good quote-based answer:
+ *
+ *   coverage — how much of the question the chosen passages between them
+ *              address. A passage answering half the question is half an answer.
+ *   strength — how well the single best passage matches. Several weak fragments
+ *              are worse than one strong sentence, because quoting scattered
+ *              fragments produces something that reads like an answer and is not.
+ *
+ * Deliberately conservative: when this is wrong it should be wrong downwards,
+ * because the cost of under-confidence is a model call, and the cost of
+ * over-confidence is a bad answer the user believes.
+ *
+ * @param {Array<{text: string, score: number}>} passages
+ * @param {Set<string>} queryTerms
+ * @returns {number} 0..1
+ */
+function extractiveConfidence(passages, queryTerms) {
+  if (!passages.length || !queryTerms.size) return 0;
+
+  const covered = new Set();
+  for (const p of passages) {
+    for (const t of p.matched ?? []) covered.add(t);
+  }
+
+  const coverage = covered.size / queryTerms.size;
+  const strength = Math.min(1, passages[0].score);
+
+  // One passage carrying the answer beats four that each carry a fragment.
+  const concentration = passages.length <= 2 ? 1 : 0.85;
+
+  return round(Math.min(1, (0.6 * coverage + 0.4 * strength) * concentration));
 }
 
 // -------------------------------------------------------------- relations

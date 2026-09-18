@@ -39,6 +39,7 @@ import { search as runSearch, similarTo } from './retrieval/search.js';
 import { parse as parseQuery } from './retrieval/query.js';
 import * as context from './context/builder.js';
 import * as proactive from './context/proactive.js';
+import * as answerCache from './context/answer-cache.js';
 import { parseSource } from './capture/parse.js';
 import { estimateTokens } from './core/text.js';
 
@@ -359,31 +360,142 @@ export class Chitraq {
         context: ctx,
         citations: [],
         provider: null,
+        cached: false,
+        escalated: false,
+        ladder: {
+          floorConfidence: 0,
+          threshold: opts.minConfidence ?? 0.55,
+          reason: 'memory holds nothing about this',
+          canEscalate: false,
+        },
+        notices: [],
         latencyMs: Date.now() - t0,
       };
     }
 
-    const run = await this.router.tryRun(
-      Capability.Answer,
-      {
-        question,
-        context: ctx.items.map((i) => ({
-          id: i.id,
-          title: i.title,
-          text: i.text,
-          // Carried through so an answer can tell current knowledge from what
-          // has since been replaced, instead of quoting both as fact.
-          state: i.state,
-          epistemic: i.epistemic,
-        })),
-        rendered: context.render(ctx),
-        conflicts: ctx.conflicts,
-        retrospective: ctx.intent.retrospective,
-      },
-      { workspaceId: this.workspaceId, contextIds: ctx.items.map((i) => i.id) }
-    );
+    const task = {
+      question,
+      context: ctx.items.map((i) => ({
+        id: i.id,
+        title: i.title,
+        text: i.text,
+        // Carried through so an answer can tell current knowledge from what
+        // has since been replaced, instead of quoting both as fact.
+        state: i.state,
+        epistemic: i.epistemic,
+      })),
+      rendered: context.render(ctx),
+      conflicts: ctx.conflicts,
+      retrospective: ctx.intent.retrospective,
+    };
+    const contextIds = ctx.items.map((i) => i.id);
 
-    objects.touch(this.db, ctx.items.map((i) => i.id));
+    // ---------------------------------------------------------------------
+    // The answer ladder.
+    //
+    // Building the context above was deterministic and cost nothing. The model
+    // call is the only expensive step, so it is the last resort rather than the
+    // first move:
+    //
+    //   1. cache      — same question, same underlying material, already answered
+    //   2. extractive — quote the user's own sentences; free, instant, cannot
+    //                   hallucinate
+    //   3. a model    — only when quoting genuinely is not enough
+    //
+    // Most questions asked of a personal memory are lookups, and a lookup is
+    // answered perfectly by handing back the sentence you wrote. Sending those
+    // to a model costs money and adds latency to buy nothing.
+    // ---------------------------------------------------------------------
+
+    const cacheKey = answerCache.keyFor({
+      question,
+      context: ctx.items.map((i) => ({ id: i.id, contentHash: contentHashOf(this.db, i.id) })),
+      // The rung of the ladder is part of the key. Without it, asking for a
+      // better answer would be served the cheaper cached one it was asked to
+      // improve on — the cache would silently refuse the upgrade.
+      provider: opts.escalate === 'always' ? 'escalated' : 'auto',
+    });
+
+    if (opts.cache !== false) {
+      const hit = answerCache.get(this.db, { workspaceId: this.workspaceId, key: cacheKey });
+      if (hit) {
+        objects.touch(this.db, contextIds);
+        return {
+          question,
+          answer: hit.answer,
+          grounded: hit.grounded,
+          passages: [],
+          citations: hit.citations,
+          uncertainty: hit.uncertainty,
+          method: 'cached',
+          provider: hit.provider,
+          cached: true,
+          escalated: false,
+          degraded: false,
+          // A cached answer still reports the ladder, so the interface can
+          // offer a better one. Without this, caching a cheap answer would
+          // quietly remove the user's ability to ask for a written one.
+          ladder: {
+            floorConfidence: null,
+            threshold: opts.minConfidence ?? 0.55,
+            reason: 'answered before, and nothing behind it has changed',
+            canEscalate: hit.provider === 'builtin' && hasBetterAnswerer(this.registry),
+          },
+          conflicts: ctx.conflicts,
+          notices: proactive.forQuestion(this.db, {
+            workspaceId: this.workspaceId,
+            question,
+            contextIds,
+          }),
+          context: ctx,
+          latencyMs: Date.now() - t0,
+        };
+      }
+    }
+
+    // Step 2: the free answer. Always computed — it is the fallback if a model
+    // is unavailable, and the baseline the escalation decision is made against.
+    // tryRun, not run: with every provider removed there is no floor either,
+    // and losing all intelligence must still leave a working context and a
+    // truthful "nothing could answer this" rather than an exception.
+    const floor = await this.router.tryRun(Capability.Answer, task, {
+      workspaceId: this.workspaceId,
+      contextIds,
+      policy: { preferProviders: ['builtin'], denyProviders: remoteAnswerers(this.registry) },
+    });
+
+    const escalation = this.#shouldEscalate(floor?.result, ctx, opts);
+    let run = floor;
+    let escalated = false;
+
+    if (escalation.escalate) {
+      const better = await this.router.tryRun(Capability.Answer, task, {
+        workspaceId: this.workspaceId,
+        contextIds,
+        policy: { denyProviders: ['builtin'] },
+      });
+      if (better) {
+        run = better;
+        escalated = true;
+      }
+    }
+
+    objects.touch(this.db, contextIds);
+
+    if (opts.cache !== false && run?.result) {
+      answerCache.put(this.db, {
+        workspaceId: this.workspaceId,
+        key: cacheKey,
+        question,
+        contextIds,
+        provider: run.provider,
+        model: this.registry.get(run.provider)?.model,
+        answer: run.result.answer ?? null,
+        grounded: !!run.result.grounded,
+        citations: run.result.citations ?? [],
+        uncertainty: run.result.uncertainty ?? null,
+      });
+    }
 
     return {
       question,
@@ -395,6 +507,16 @@ export class Chitraq {
       method: run?.result?.method ?? null,
       provider: run?.provider ?? null,
       degraded: run?.degraded ?? true,
+      cached: false,
+      escalated,
+      // Why the ladder stopped where it did, so the interface can offer
+      // "get a better answer" honestly rather than guessing.
+      ladder: {
+        floorConfidence: floor?.result?.confidence ?? 0,
+        threshold: escalation.threshold,
+        reason: escalation.reason,
+        canEscalate: !escalated && hasBetterAnswerer(this.registry),
+      },
       conflicts: ctx.conflicts,
       notices: proactive.forQuestion(this.db, {
         workspaceId: this.workspaceId,
@@ -1140,6 +1262,82 @@ export class Chitraq {
     return sync.peers(this.db, this.workspaceId);
   }
 
+
+  /**
+   * Decide whether the free answer is good enough.
+   *
+   * Three things force a model call:
+   *   - the extractive answer failed outright (nothing quotable matched)
+   *   - it matched weakly, so quoting would produce a plausible non-answer
+   *   - the question asks for synthesis — comparing, summarising, counting —
+   *     which quoting cannot do however well the passages match
+   *
+   * Everything else is a lookup, and a lookup is what quoting is *for*.
+   *
+   * @param {any} result
+   * @param {any} ctx
+   * @param {{escalate?: 'auto'|'never'|'always', minConfidence?: number}} opts
+   * @returns {{escalate: boolean, reason: string, threshold: number}}
+   */
+  #shouldEscalate(result, ctx, opts = {}) {
+    const mode = opts.escalate ?? 'auto';
+    const threshold = opts.minConfidence ?? 0.55;
+
+    if (mode === 'never') {
+      return { escalate: false, reason: 'escalation switched off', threshold };
+    }
+    if (mode === 'always') {
+      return { escalate: true, reason: 'escalation requested', threshold };
+    }
+    if (!ctx.items.length) {
+      // Nothing retrieved. A model cannot invent what memory does not hold, and
+      // asking it to is exactly how a memory engine starts making things up.
+      return { escalate: false, reason: 'memory holds nothing about this', threshold };
+    }
+    if (!result?.grounded) {
+      return { escalate: true, reason: 'nothing in the context could be quoted directly', threshold };
+    }
+    if (SYNTHESIS.test(ctx.intent?.raw ?? '')) {
+      return {
+        escalate: true,
+        reason: 'the question asks for synthesis, which quoting cannot do',
+        threshold,
+      };
+    }
+    if ((result.confidence ?? 0) < threshold) {
+      return {
+        escalate: true,
+        reason: `the quoted answer only covers part of the question (${result.confidence ?? 0})`,
+        threshold,
+      };
+    }
+    return {
+      escalate: false,
+      reason: 'no model was needed',
+      threshold,
+    };
+  }
+
+  /**
+   * Ask again, forcing the best available model.
+   * This is what an interface's "get a better answer" button calls.
+   * @param {string} question
+   * @param {object} [opts]
+   */
+  askBetter(question, opts = {}) {
+    return this.ask(question, { ...opts, escalate: 'always', cache: opts.cache });
+  }
+
+  /** How many model calls the answer cache has avoided. */
+  cacheStats() {
+    return answerCache.stats(this.db, this.workspaceId);
+  }
+
+  /** @param {{olderThanDays?: number}} [opts] */
+  clearAnswerCache(opts = {}) {
+    return answerCache.clear(this.db, this.workspaceId, opts);
+  }
+
   // ============================================================ internals
 
   /**
@@ -1319,6 +1517,50 @@ export class Chitraq {
   }
 }
 
+
+/**
+ * Questions that quoting cannot answer however well the passages match:
+ * they need several pieces combined, contrasted or counted.
+ */
+const SYNTHESIS =
+  /\b(summari[sz]e|summary|compare|contrast|difference between|overall|in total|how many|how much total|list all|what are all|trend|pattern|across all|timeline of|walk me through|explain why|pros and cons)\b/i;
+
+/**
+ * Is there a better answerer we could actually reach?
+ *
+ * Availability matters, not just registration. Ollama is registered on every
+ * install whether or not it is running, and offering "ask a model instead" when
+ * the model is not there produces a button that fails — worse than no button.
+ *
+ * Health is read from the registry's cache rather than probed, because this
+ * runs inside a response. A provider we have never probed is offered
+ * optimistically; one we know is down is not.
+ *
+ * @param {import('./intelligence/registry.js').Registry} registry
+ */
+function hasBetterAnswerer(registry) {
+  return registry
+    .supporting(Capability.Answer)
+    .some((p) => !p.deterministic && registry.healthCache.get(p.id)?.ok !== false);
+}
+
+/**
+ * Everything except the floor, for pinning step 2 of the ladder to it.
+ * @param {import('./intelligence/registry.js').Registry} registry
+ */
+function remoteAnswerers(registry) {
+  return registry.supporting(Capability.Answer).filter((p) => p.id !== 'builtin').map((p) => p.id);
+}
+
+/**
+ * An object's content hash, for the cache key.
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {string} objectId
+ */
+function contentHashOf(db, objectId) {
+  return String(db.prepare('SELECT content_hash FROM object WHERE id = ?').get(objectId)?.content_hash ?? '');
+}
+
 /** @param {number} n */
 function round4(n) {
   return Math.round(n * 1e6) / 1e6;
@@ -1333,4 +1575,5 @@ function truncateTitle(text) {
 export {
   DEFAULT_POLICY, estimateTokens, gateway, objects, relations, sources,
   events, indexer, context, entities, transfer, proactive, budget, ann, salience, auth, sync,
+  answerCache,
 };

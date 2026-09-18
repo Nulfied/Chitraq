@@ -150,13 +150,24 @@ async function run(command, rest, flags, c) {
 
     case 'ask': {
       if (!joined) throw new Error('Give a question.');
-      const answered = await c.ask(joined);
+      const answered = await c.ask(joined, {
+        escalate: flags.better ? 'always' : undefined,
+        cache: flags['no-cache'] ? false : undefined,
+      });
 
       console.log('');
       if (answered.grounded) {
         console.log(`  ${wrap(answered.answer, 2)}`);
         console.log('');
-        console.log(`  ${dim(`from ${answered.citations.length} item(s) in memory · ${answered.provider}`)}`);
+        const how = answered.cached
+          ? 'from an earlier answer'
+          : answered.escalated
+            ? `written by ${answered.provider}`
+            : 'quoted from your own words — no model was called';
+        console.log(`  ${dim(`${how} · ${answered.citations.length} item(s) cited`)}`);
+        if (answered.ladder?.canEscalate) {
+          console.log(`  ${dim('for a written answer instead:  chitraq ask "…" --better')}`);
+        }
         for (const id of answered.citations) {
           const obj = c.recall(id)?.object;
           if (obj) console.log(`    ${dim(id)}  ${obj.title}`);
@@ -512,6 +523,8 @@ function usage(code = 0) {
     --accept-above <n>  accept proposals at or above this confidence
     --dry-run       for 'import': report what would happen, write nothing
     --limit <n>     how many results
+    --better        ask a model instead of quoting your own words
+    --no-cache      skip the answer cache
     --why           show why each search result ranked where it did
     --context       show the context an answer was built from
 

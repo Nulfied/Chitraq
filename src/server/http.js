@@ -92,8 +92,17 @@ export function createApp(chitraq, opts = {}) {
   );
 
   route('POST', '/api/ask', ({ body }) =>
-    chitraq.ask(body.question, { budget: body.budget, seeds: body.seeds })
+    chitraq.ask(body.question, {
+      budget: body.budget,
+      seeds: body.seeds,
+      escalate: body.escalate,
+      cache: body.cache,
+    })
   );
+
+  route('GET', '/api/answer-cache', () => chitraq.cacheStats());
+
+  route('DELETE', '/api/answer-cache', () => chitraq.clearAnswerCache());
 
   route('GET', '/api/timeline', ({ query }) =>
     chitraq.timeline({

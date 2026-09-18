@@ -129,6 +129,94 @@ export function termFrequency(terms) {
   return tf;
 }
 
+
+/**
+ * A light suffix stemmer, for matching only.
+ *
+ * "why did we drop redis" should match a note saying "we dropped Redis". Without
+ * this, that question scores as a half-match and gets escalated to a paid model
+ * to answer something the user's own sentence already answers — so the cost of
+ * not stemming is measured in dollars, not just relevance.
+ *
+ * Deliberately not a full Porter stemmer. It handles the endings that actually
+ * cause missed matches in ordinary writing and leaves everything else alone,
+ * because aggressive stemming creates false matches that are harder to notice
+ * than missed ones. It is never used for indexing or display — only for
+ * deciding whether two words are the same word.
+ *
+ * @param {string} term
+ * @returns {string}
+ */
+export function stem(term) {
+  if (term.length < 4) return term;
+  if (KEEP_WHOLE.has(term)) return term;
+
+  return dropSilentE(strip(term));
+}
+
+/**
+ * Remove one inflectional ending.
+ * @param {string} term
+ */
+function strip(term) {
+  // -ies -> -y   (memories -> memory, but not "series")
+  if (term.endsWith('ies') && term.length > 4) return `${term.slice(0, -3)}y`;
+  // -sses -> -ss (addresses -> address)
+  if (term.endsWith('sses')) return term.slice(0, -2);
+  // -ss, -us, -is are part of the word (business, status, analysis)
+  if (/(ss|us|is)$/.test(term)) return term;
+  // -ches/-shes/-xes/-zes -> bare (boxes -> box)
+  if (term.endsWith('es') && term.length > 4 && /(ch|sh|x|z|s)es$/.test(term)) return term.slice(0, -2);
+  // plain plural
+  if (term.endsWith('s') && !term.endsWith('ss')) return term.slice(0, -1);
+  // -ing -> bare (dropping -> drop)
+  if (term.endsWith('ing') && term.length > 5) return undouble(term.slice(0, -3));
+  // -ed -> bare (dropped -> drop). Never for -eed: "exceed", "need" and
+  // "speed" end that way natively, and stripping it makes them non-words.
+  if (term.endsWith('ed') && !term.endsWith('eed') && term.length > 4) {
+    return undouble(term.slice(0, -2));
+  }
+  return term;
+}
+
+/**
+ * Drop a trailing silent 'e'.
+ *
+ * "cache" and "caches" reduce to "cach"; "decide" and "decided" to "decid".
+ * Neither is a word, and that is fine — a stem is a matching key, not a
+ * display form. What matters is only that the two forms agree, and trying to
+ * restore the right spelling is where stemmers get complicated and wrong.
+ *
+ * @param {string} base
+ */
+function dropSilentE(base) {
+  return base.length > 3 && base.endsWith('e') ? base.slice(0, -1) : base;
+}
+
+/** dropp -> drop, runn -> run */
+function undouble(base) {
+  return /([bdfglmnprt])\1$/.test(base) ? base.slice(0, -1) : base;
+}
+
+/** Words whose ending looks like an inflection but is not. */
+const KEEP_WHOLE = new Set([
+  // The trailing -s belongs to the word.
+  'this', 'has', 'was', 'does', 'goes', 'yes', 'gas', 'bus', 'plus', 'less',
+  'press', 'class', 'cross', 'series', 'species', 'news', 'analysis', 'basis',
+  'status', 'focus', 'process', 'access', 'address',
+  // The trailing -ing belongs to the word.
+  'thing', 'string', 'ring', 'king', 'during', 'being', 'spring',
+]);
+
+/**
+ * Content terms, stemmed for matching.
+ * @param {string} text
+ * @returns {string[]}
+ */
+export function matchTerms(text) {
+  return contentTerms(text).map(stem);
+}
+
 /**
  * Split text for indexing and context assembly.
  *

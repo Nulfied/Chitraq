@@ -5,7 +5,7 @@ What is actually built, what is partial, and what is deliberately not built.
 States: **IMPLEMENTED** (built and tested), **PARTIAL** (works, with a stated
 limit), **NOT BUILT** (deliberately deferred).
 
-Last updated: 2026-09-18. 174 tests passing.
+Last updated: 2026-09-18. 194 tests passing.
 
 ---
 
@@ -47,6 +47,31 @@ Last updated: 2026-09-18. 174 tests passing.
 | Quality and recency weighting | IMPLEMENTED | |
 | Incremental indexing and full rebuild | IMPLEMENTED | |
 
+### Measured: how often a model is actually called
+
+The ladder tries the free extractive answer first and only escalates when
+quoting genuinely cannot answer. Measured over ten realistic questions against
+the demo workspace:
+
+| outcome | count |
+|---|---|
+| answered by quoting your own words, no model | 6 |
+| served from cache, no model | 2 |
+| escalated to a model | 2 |
+
+**80% of questions never reached a model**, and the two that did were the right
+ones: a question whose answer was spread across a long note (confidence 0.43),
+and an explicit "summarize our architecture decisions".
+
+Cache invalidation is structural rather than managed: the key is built from the
+content hashes of the objects the answer rests on, so editing any of them, or
+capturing something new that now retrieves for that question, moves the key. A
+stale answer cannot be served because if it could be stale, the key already
+changed. Unrelated captures do not invalidate anything.
+
+`test/ladder.test.js` counts model calls directly, so a change that quietly
+starts sending every question to a paid provider fails the suite.
+
 ### Measured: the approximate index
 
 Run `node scripts/bench-vectors.js [n]` to reproduce. On this machine, 256-dim
@@ -81,6 +106,8 @@ reported on the Status screen; not automatic.
 | Conflict inclusion, relevance-gated | IMPLEMENTED | |
 | Token budgeting with trimming | IMPLEMENTED | |
 | Per-item justification | IMPLEMENTED | |
+| **Answer ladder** | IMPLEMENTED | Quote first, escalate only when quoting is not enough |
+| **Answer cache** | IMPLEMENTED | Keyed on context content, so it invalidates itself |
 | **Proactive notices** | IMPLEMENTED | Seen-before, contradiction, previously-rejected, superseded-source, stale figures, review backlog. Read-only, thresholded, explains itself |
 
 ## Intelligence fabric — IMPLEMENTED
