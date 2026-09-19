@@ -40,7 +40,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/PLACEHOLDER/chitraq.git"
+    "url": "git+https://github.com/Nulfied/Chitraq.git"
   },
-  "author": "Nulfied"
+  "author": "Nulfied",
+  "homepage": "https://github.com/Nulfied/Chitraq#readme",
+  "bugs": {
+    "url": "https://github.com/Nulfied/Chitraq/issues"
+  }
 }

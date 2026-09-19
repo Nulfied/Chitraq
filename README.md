@@ -15,7 +15,7 @@ account to create and no API bill.
 ## Try it
 
 ```bash
-git clone https://github.com/<you>/chitraq
+git clone https://github.com/Nulfied/Chitraq
 cd chitraq
 npm test                                     # 326 tests, no install step
 
