@@ -39,9 +39,9 @@ jobs:
         node: ['24']
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ matrix.node }}
 
@@ -57,13 +57,36 @@ jobs:
         # No models are installed here, and that is the point: the
         # deterministic provider is the floor the whole system stands on, so
         # the suite has to pass with nothing else present.
-        run: npm test
+        #
+        # The failure is echoed as a workflow error as well as being in the log,
+        # because GitHub now asks people to sign in before reading a job log —
+        # annotations stay readable to anyone looking at the run.
+        shell: bash
+        run: |
+          set +e
+          npm test 2>&1 | tee test-output.txt
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            echo "--- failures ---"
+            grep -E "^(not ok|# fail|# pass|# tests)" test-output.txt | head -40
+            summary=$(grep -E "^not ok" test-output.txt | head -10 | tr '\n' ' ')
+            echo "::error::${summary:-npm test exited $code with no failing test reported}"
+          fi
+          exit "$code"
+
+      - name: Keep the output when it fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output-${{ matrix.os }}
+          path: test-output.txt
+          retention-days: 7
 
   dependencies:
     name: still has no dependencies
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Check package.json
         run: |
           node -e "
