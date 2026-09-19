@@ -73,8 +73,14 @@ jobs:
             # exactly what happened the first time this was written.
             echo "--- last 80 lines ---"
             tail -80 test-output.txt
-            summary=$(grep -aE "(FAIL|failing tests|Error:|Cannot find|not ok)" test-output.txt | head -8 | tr '\n' ' ')
-            echo "::error::${summary:-see the uploaded artifact; exit was $code}"
+            # The failing test names, by the mark the reporter actually
+            # prints. Earlier attempts matched TAP syntax and then a
+            # section header, and both reported nothing about a run full
+            # of failures. Artifacts and logs need a login; annotations do
+            # not, so the names belong here.
+            names=$(grep -a '✖' test-output.txt | head -12 | tr '\n' '~')
+            counts=$(grep -aE '^. (tests|pass|fail) ' test-output.txt | tr '\n' ' ')
+            echo "::error::${counts} :: ${names:-no marked failures; exit was $code}"
           fi
           exit "$code"
 
