@@ -8,16 +8,26 @@ relationships and time, retrieves it in context, and lets many kinds of
 intelligence work over it — while keeping deterministic ownership of identity,
 history, provenance and truth.
 
-It runs entirely on your machine, with **zero dependencies**. Node 22.5+ ships
-SQLite with FTS5 in core, so there is nothing to install, no service to run, no
+It runs entirely on your machine, with **zero dependencies**. Node ships SQLite
+with FTS5 in core, so there is nothing to install, no service to run, no
 account to create and no API bill.
 
+## Try it
+
 ```bash
+git clone https://github.com/<you>/chitraq
+cd chitraq
+npm test                                     # 326 tests, no install step
+
 node scripts/seed.js demo/memory.chitraq     # build a demo memory
 node src/server/serve.js --db demo/memory.chitraq
 ```
 
 Then open <http://127.0.0.1:4317>.
+
+Requires **Node 24 or later** — that is the version this is developed and
+tested on. `node:sqlite` exists from 22.5, so older versions may well work;
+nobody has checked, so the engines field says 24.
 
 ---
 
@@ -416,12 +426,16 @@ partial, and what is designed but not built.
 npm test
 ```
 
-174 tests covering the invariants, not just the happy path: that AI cannot
+326 tests covering the invariants, not just the happy path: that AI cannot
 overwrite your edges, that a stale proposal is refused at accept time, that
 memory survives the total loss of every intelligence provider, that superseded
 pricing never appears as current, that two devices editing the same note raises
 a conflict instead of losing one, that running out of budget never blocks
-capture, and that erasure leaves an audit trail.
+capture, that a scoped token cannot exceed its scope, that a file being written
+is never captured half-finished, and that erasure leaves an audit trail.
+
+The suite passes with **no models installed at all**. The deterministic
+provider is the floor everything stands on.
 
 ```bash
 node scripts/bench-vectors.js 6000   # measure approximate vs exact search
@@ -440,4 +454,31 @@ Nothing leaves your machine unless you explicitly turn remote providers on.
 
 ---
 
-MIT.
+## Where this actually is
+
+Built and tested, not yet lived with. Everything described here works and has
+tests; `docs/STATUS.md` lists what is implemented, what is partial, and an
+honest weaknesses section that is kept current rather than trimmed. Read it
+before depending on this for anything.
+
+The parts most worth knowing about: fax-encoded scans cannot be read, concepts
+are the weakest entity kind, the Claude adapter is written but has never been
+run against the live API, and nothing has yet been used daily for a month by
+anybody.
+
+`docs/INVARIANTS.md` lists the sixty rules the code is built to hold, each
+naming where it is enforced and the test that proves it. `docs/ARCHITECTURE.md`
+is the shape of the thing.
+
+---
+
+## Licence
+
+**AGPL-3.0-or-later.** Use it, change it, self-host it, take your data
+elsewhere. If you run a *modified* version as a network service, publish your
+changes so its users have what you have.
+
+If that does not suit what you want to build, ask about a commercial licence
+rather than working around it.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) if you want to send a change.

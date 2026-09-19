@@ -1,11 +1,11 @@
 {
   "name": "chitraq",
   "version": "0.1.0",
-  "description": "Chitraq \u2014 the memory engine for everyone. One memory, many intelligences.",
+  "description": "Chitraq — the memory engine for everyone. One memory, many intelligences.",
   "type": "module",
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "engines": {
-    "node": ">=22.5.0"
+    "node": ">=24.0.0"
   },
   "bin": {
     "chitraq": "./src/cli/chitraq.js"
@@ -37,5 +37,10 @@
     "embeddings",
     "retrieval",
     "ollama"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PLACEHOLDER/chitraq.git"
+  },
+  "author": "Nulfied"
 }
