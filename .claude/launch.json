@@ -18,6 +18,14 @@
         "src/server/serve.js"
       ],
       "port": 4317
+    },
+    {
+      "name": "chitraq-docs",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "scripts/serve-docs.js"
+      ],
+      "port": 4318
     }
   ]
 }

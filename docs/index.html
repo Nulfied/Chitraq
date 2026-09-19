@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chitraq — the memory engine for everyone</title>
+<meta name="description" content="A persistent computational memory that owns identity, history, provenance and truth — while any model works over it. Local-first, zero dependencies, 326 tests.">
+<meta property="og:title" content="Chitraq">
+<meta property="og:description" content="One memory, many intelligences. Storage answers where the file is. Memory answers what you know, how you know it, and what changed.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>◈</text></svg>">
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-soft: #f6f7f9;
+    --bg-code: #f2f3f5;
+    --fg: #16181d;
+    --fg-soft: #5a6069;
+    --line: #e3e5e9;
+    --accent: #3b6fe0;
+    --accent-2: #d4407a;
+    --ok: #1a7f5a;
+    --warn: #a4632a;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, Roboto, sans-serif;
+    --kw: #8250df; --str: #0a7d4f; --num: #b3541e; --com: #7b828c; --typ: #1f6fb2; --fn: #b3407a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0e1014; --bg-soft: #14171d; --bg-code: #171b22;
+      --fg: #e7e9ee; --fg-soft: #98a0ac; --line: #262b34;
+      --accent: #7aa2f7; --accent-2: #f07aa8; --ok: #56d4a0; --warn: #e0a96d;
+      --kw: #c08cf5; --str: #7bd6a4; --num: #f0a868; --com: #6d757f; --typ: #79c0ff; --fn: #f79ac0;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0e1014; --bg-soft: #14171d; --bg-code: #171b22;
+    --fg: #e7e9ee; --fg-soft: #98a0ac; --line: #262b34;
+    --accent: #7aa2f7; --accent-2: #f07aa8; --ok: #56d4a0; --warn: #e0a96d;
+    --kw: #c08cf5; --str: #7bd6a4; --num: #f0a868; --com: #6d757f; --typ: #79c0ff; --fn: #f79ac0;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font-family: var(--sans); font-size: 16px; line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 0 16px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre { font-family: var(--mono); font-size: 0.875em; }
+  :not(pre) > code {
+    background: var(--bg-code); padding: 0.15em 0.4em; border-radius: 4px;
+    border: 1px solid var(--line);
+  }
+
+  /* ---- header ---- */
+  header { border-bottom: 1px solid var(--line); position: sticky; top: 0; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); z-index: 10; }
+  .nav { display: flex; align-items: center; gap: 20px; height: 56px; }
+  .brand { display: flex; align-items: center; gap: 9px; font-weight: 650; letter-spacing: 0.02em; color: var(--fg); }
+  .brand svg { display: block; }
+  .nav-links { margin-left: auto; display: flex; gap: 18px; font-size: 14px; flex-wrap: wrap; }
+  .nav-links a { color: var(--fg-soft); }
+  .nav-links a:hover { color: var(--fg); text-decoration: none; }
+
+  /* ---- hero ---- */
+  .hero { padding: 68px 0 44px; }
+  .hero h1 {
+    font-size: clamp(34px, 6vw, 56px); line-height: 1.08; margin: 0 0 14px;
+    letter-spacing: -0.025em; font-weight: 700;
+  }
+  .hero h1 .grad {
+    background: linear-gradient(100deg, var(--accent), var(--accent-2));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .hero p.lead { font-size: clamp(16px, 2.4vw, 19px); color: var(--fg-soft); max-width: 62ch; margin: 0 0 26px; }
+  .cta { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .btn {
+    display: inline-block; padding: 9px 17px; border-radius: 8px; font-size: 14px;
+    font-weight: 550; border: 1px solid var(--line); color: var(--fg); background: var(--bg-soft);
+  }
+  .btn:hover { text-decoration: none; border-color: var(--accent); }
+  .btn.primary { background: var(--accent); color: #fff; border-color: transparent; }
+  .btn.primary:hover { filter: brightness(1.08); }
+  .badge {
+    font-size: 12px; font-family: var(--mono); color: var(--ok);
+    border: 1px solid color-mix(in srgb, var(--ok) 40%, transparent);
+    background: color-mix(in srgb, var(--ok) 10%, transparent);
+    padding: 3px 9px; border-radius: 999px;
+  }
+
+  /* ---- layout blocks ---- */
+  section { padding: 44px 0; border-top: 1px solid var(--line); }
+  section > .wrap > h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--fg-soft); margin: 0 0 20px; font-weight: 650; }
+  h3 { font-size: 19px; margin: 0 0 8px; letter-spacing: -0.01em; }
+
+  pre {
+    background: var(--bg-code); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 18px; overflow-x: auto; margin: 0; line-height: 1.6;
+  }
+  .grid { display: grid; gap: 18px; }
+  @media (min-width: 720px) { .cols-2 { grid-template-columns: 1fr 1fr; } .cols-3 { grid-template-columns: repeat(3, 1fr); } }
+  .card { border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; background: var(--bg-soft); }
+  .card p { margin: 0; color: var(--fg-soft); font-size: 15px; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 15px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--fg-soft); font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; }
+  td code { white-space: nowrap; }
+  td.num { font-family: var(--mono); font-size: 13px; white-space: nowrap; }
+
+  .two { display: grid; gap: 20px; align-items: start; }
+  @media (min-width: 860px) { .two { grid-template-columns: 1fr 1fr; } }
+
+  footer { border-top: 1px solid var(--line); padding: 28px 0 44px; color: var(--fg-soft); font-size: 14px; }
+  footer a { color: var(--fg-soft); text-decoration: underline; }
+
+  /* ---- syntax colours ---- */
+  .k { color: var(--kw); } .s { color: var(--str); } .n { color: var(--num); }
+  .c { color: var(--com); font-style: italic; } .t { color: var(--typ); } .f { color: var(--fn); }
+  .o { color: var(--fg-soft); }
+  .ok { color: var(--ok); } .warn { color: var(--warn); }
+
+  .note { font-size: 14px; color: var(--fg-soft); }
+  ul.tight { margin: 8px 0 0; padding-left: 20px; }
+  ul.tight li { margin: 3px 0; color: var(--fg-soft); font-size: 15px; }
+
+  /* A claim stated plainly, given room to be read. */
+  .claim {
+    border-left: 3px solid var(--accent); padding: 2px 0 2px 16px;
+    margin: 0 0 18px; font-size: 17px; color: var(--fg);
+  }
+  .claim strong { font-weight: 650; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="#top">
+      <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+        <defs>
+          <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#5b9cf8"/><stop offset="55%" stop-color="#a97bf0"/><stop offset="100%" stop-color="#ef5f8d"/>
+          </linearGradient>
+        </defs>
+        <rect x="1" y="1" width="22" height="22" rx="6" fill="none" stroke="url(#g)" stroke-width="1.6"/>
+        <circle cx="8" cy="8" r="2.1" fill="url(#g)"/>
+        <circle cx="16" cy="11" r="2.1" fill="url(#g)"/>
+        <circle cx="9.5" cy="16.5" r="2.1" fill="url(#g)"/>
+        <path d="M8 8 L16 11 M16 11 L9.5 16.5 M9.5 16.5 L8 8" fill="none" stroke="url(#g)" stroke-width="1.2" opacity="0.65"/>
+      </svg>
+      Chitraq
+    </a>
+    <nav class="nav-links">
+      <a href="#start">Get started</a>
+      <a href="#idea">The idea</a>
+      <a href="#ladder">Cost</a>
+      <a href="#measured">Measured</a>
+      <a href="#embed">Use it</a>
+      <a href="https://github.com/Nulfied/Chitraq/blob/main/docs/STATUS.md">Status</a>
+      <a href="https://github.com/Nulfied/Chitraq">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+<div class="wrap hero">
+  <span class="badge">v0.1 · 326 tests · zero dependencies · pre-1.0</span>
+  <h1>One memory.<br><span class="grad">Many intelligences.</span></h1>
+  <p class="lead">
+    Chitraq is a persistent computational memory. A deterministic core owns
+    identity, versioning, provenance and truth; models work <em>over</em> it and
+    are never allowed to own it. Swap the model, keep the memory — including
+    everything the last one contributed, still labelled as its work.
+  </p>
+  <div class="cta">
+    <a class="btn primary" href="#start">Get started</a>
+    <a class="btn" href="https://github.com/Nulfied/Chitraq">Source on GitHub</a>
+    <a class="btn" href="https://github.com/Nulfied/Chitraq/blob/main/docs/STATUS.md">What actually works</a>
+  </div>
+</div>
+
+<section id="idea">
+  <div class="wrap">
+    <h2>The idea</h2>
+    <p class="claim">
+      Most tools here are <strong>storage with search bolted on</strong>. Storage
+      answers "where is the file?" Memory has to answer "what do I know, how do I
+      know it, what has changed, and what matters now?"
+    </p>
+    <div class="grid cols-2">
+      <div class="card">
+        <h3>Knowledge, not documents</h3>
+        <p>A file is kept verbatim as a <em>Source</em>. The claims, decisions and
+        observations inside it become separate objects, each with its own status,
+        evidence and history — so one paragraph can be superseded without
+        rewriting the document it came from.</p>
+      </div>
+      <div class="card">
+        <h3>Provenance never gets lost</h3>
+        <p>Every object records whether <em>you</em> wrote it, a <em>source</em>
+        stated it, an <em>algorithm</em> derived it, or a <em>model</em> produced
+        it. Confirming an AI-derived fact marks it confirmed; it does not relabel
+        it as yours.</p>
+      </div>
+      <div class="card">
+        <h3>History is never rewritten</h3>
+        <p>Editing appends a version. Superseding keeps the old object readable
+        and linked forward. "What did we believe in March?" is a question with an
+        answer. Only an explicit <code>erase</code>, with a stated reason,
+        destroys anything.</p>
+      </div>
+      <div class="card">
+        <h3>Intelligence proposes; you decide</h3>
+        <p>No model writes to memory. A capability returns a value, the value
+        becomes a proposal, and a proposal becomes knowledge only when accepted.
+        There is no second path in — it is enforced in one place and tested.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="ladder">
+  <div class="wrap">
+    <h2>It answers before it spends</h2>
+    <div class="two">
+      <div>
+        <p style="margin-top:0">
+          Most questions to a memory are lookups, and a lookup does not need a
+          language model — it needs the sentence you already wrote. Chitraq tries
+          that first, and escalates only when quoting genuinely cannot answer:
+          when nothing matched, when the match is too weak to trust, or when the
+          question asks for synthesis.
+        </p>
+        <table>
+          <thead><tr><th>Outcome</th><th>of 10</th></tr></thead>
+          <tbody>
+            <tr><td>answered by quoting your own words</td><td class="num">6</td></tr>
+            <tr><td>served from cache</td><td class="num">2</td></tr>
+            <tr><td>escalated to a model</td><td class="num">2</td></tr>
+          </tbody>
+        </table>
+        <p class="note" style="margin-bottom:0">
+          Measured over ten realistic questions. <strong>80% never reached a
+          model.</strong> A test counts model calls directly, so a change that
+          quietly starts sending everything to a paid provider fails the suite.
+        </p>
+      </div>
+      <div>
+<pre><code><span class="o">$</span> chitraq ask <span class="s">"why did we drop the redis cache"</span>
+
+  <span class="ok">quoted from your own words</span>        confidence <span class="n">0.82</span>
+
+  The hit rate never exceeded 30% and the
+  memory cost was not worth it.
+
+  <span class="c">from  obj_01J8F… · user · confirmed</span>
+  <span class="c">cost  nothing — no model was called</span>
+  <span class="c">took  94ms</span></code></pre>
+        <p class="note">
+          The cache is keyed on the content hashes of the objects an answer rests
+          on, so editing any of them moves the key. A stale answer cannot be
+          served, because if it could be stale the key already changed.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="start">
+  <div class="wrap">
+    <h2>Get started</h2>
+    <div class="two">
+      <div>
+<pre><code><span class="c"># Nothing to install. Node ships SQLite.</span>
+git clone https://github.com/Nulfied/Chitraq
+<span class="k">cd</span> Chitraq
+npm test
+
+<span class="c"># Point it at notes you already have</span>
+chitraq ingest ~/Documents/notes
+
+<span class="c"># Then ask</span>
+chitraq ask <span class="s">"what did we decide about pricing"</span></code></pre>
+        <p class="note">Requires Node 24. There are no dependencies to install —
+        <code>package.json</code> has an empty <code>dependencies</code> block and
+        it is meant to stay that way.</p>
+      </div>
+      <div>
+        <h3>Optional: make it smarter, still free</h3>
+<pre><code>ollama pull nomic-embed-text   <span class="c"># semantic search</span>
+ollama pull moondream          <span class="c"># read images</span>
+ollama pull llama3.2           <span class="c"># written answers</span></code></pre>
+        <p class="note">
+          Everything runs on your machine at no cost. Without Ollama the built-in
+          deterministic provider still serves every capability — it is the floor
+          the whole system stands on, and the test suite passes with no models
+          installed at all.
+        </p>
+        <p class="note">
+          Embeddings are the biggest single win: head to head on queries sharing
+          almost no words with the notes, the built-in embedder found 1 of 3 and
+          Ollama found 3 of 3.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="embed">
+  <div class="wrap">
+    <h2>One memory, several programs</h2>
+    <div class="two">
+      <div>
+<pre><code><span class="o">$</span> chitraq tokens --new formfit --scope write</code></pre>
+<pre style="margin-top:12px"><code><span class="k">import</span> { <span class="t">ChitraqClient</span> } <span class="k">from</span> <span class="s">'chitraq/client'</span>
+
+<span class="k">const</span> memory <span class="o">=</span> <span class="k">new</span> <span class="t">ChitraqClient</span>({
+  url<span class="o">:</span> <span class="s">'http://127.0.0.1:4317'</span>,
+  token<span class="o">:</span> process.env.<span class="t">CHITRAQ_TOKEN</span>,
+})
+
+<span class="k">await</span> memory.<span class="f">remember</span>({
+  title<span class="o">:</span> <span class="s">'Compress PDFs in the browser'</span>,
+  kind<span class="o">:</span> <span class="s">'decision'</span>,
+})
+
+<span class="k">const</span> answer <span class="o">=</span> <span class="k">await</span> memory.<span class="f">ask</span>(
+  <span class="s">'why do we compress client-side'</span>
+)</code></pre>
+      </div>
+      <div>
+        <p style="margin-top:0">
+          The client is one file with no dependencies. It never caches and never
+          retries blindly — a memory client that quietly returns a stale answer
+          leaves you unable to tell a remembered fact from a remembered
+          <em>response</em>.
+        </p>
+        <p class="claim" style="font-size:16px">
+          Presenting a token <strong>constrains</strong> you. Presenting nothing
+          changes nothing.
+        </p>
+        <p class="note">
+          On a loopback install a token cannot make access harder to obtain —
+          anything on the machine could call the API anyway. What it does is make
+          access narrower. A <code>read</code> token is refused a write
+          <em>even where an anonymous caller is allowed one</em>, so a side
+          project can hold a credential that genuinely cannot damage the memory
+          it reads.
+        </p>
+        <table>
+          <thead><tr><th>Scope</th><th>May</th></tr></thead>
+          <tbody>
+            <tr><td><code>read</code></td><td>search, ask, recall, entities</td></tr>
+            <tr><td><code>write</code></td><td>read, plus capture and review</td></tr>
+            <tr><td><code>admin</code></td><td>everything, including erase</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="measured">
+  <div class="wrap">
+    <h2>Measured, not assumed</h2>
+    <p style="margin-top:0;max-width:66ch">
+      Two numbers in this codebase were guesses, and both were wrong by orders of
+      magnitude until something measured them. The approximate-index threshold was
+      set at 20,000 vectors; measurement put it at 5,000. A code comment claimed
+      brute-force search was "sub-millisecond at 10k chunks"; it was 152&nbsp;ms at
+      12k. <code>scripts/bench-vectors.js</code> exists so the next guess gets
+      caught too.
+    </p>
+    <div class="grid cols-2">
+      <div>
+        <h3 style="margin-bottom:12px">Vector search</h3>
+        <table>
+          <thead><tr><th>Vectors</th><th>Exact</th><th>Approx</th><th>Recall</th></tr></thead>
+          <tbody>
+            <tr><td class="num">400</td><td class="num">4.2 ms</td><td class="num">0.55 ms</td><td class="num">1.00</td></tr>
+            <tr><td class="num">2,000</td><td class="num">21 ms</td><td class="num">1.1 ms</td><td class="num">1.00</td></tr>
+            <tr><td class="num">6,000</td><td class="num">56 ms</td><td class="num">2.3 ms</td><td class="num">1.00</td></tr>
+            <tr><td class="num">12,000</td><td class="num">152 ms</td><td class="num">12.2 ms</td><td class="num">1.00</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div>
+        <h3 style="margin-bottom:12px">On a laptop with no GPU</h3>
+        <table>
+          <thead><tr><th>Operation</th><th>Time</th></tr></thead>
+          <tbody>
+            <tr><td>quoted answer — the common path</td><td class="num">70–320 ms</td></tr>
+            <tr><td>embedding a query</td><td class="num">~190 ms</td></tr>
+            <tr><td>reading an image (moondream)</td><td class="num">3.7 s warm</td></tr>
+            <tr><td>generated answer (llama3.2)</td><td class="num">41–50 s</td></tr>
+          </tbody>
+        </table>
+        <p class="note">
+          That last row changed a design decision. Escalation uses
+          <em>measured</em> latency, not what an adapter declares — Ollama claims
+          3 s and takes 45 here. Above the threshold Chitraq answers instantly
+          from your own words and <em>offers</em> the slow one, with the real wait
+          on the button.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="refuses">
+  <div class="wrap">
+    <h2>What it refuses to do</h2>
+    <div class="grid cols-3">
+      <div class="card">
+        <h3>Guess silently</h3>
+        <p>An image nothing can read is stored verbatim with a note naming the
+        capability that would unlock it. When a model <em>does</em> read it, the
+        source permanently records that its text was read rather than written —
+        a misread "38ms" is indistinguishable from a quote otherwise.</p>
+      </div>
+      <div class="card">
+        <h3>Pick a winner</h3>
+        <p>Where two machines edited the same thing, both are kept and the
+        disagreement is raised. Last-writer-wins destroys one of two real edits
+        with nobody the wiser.</p>
+      </div>
+      <div class="card">
+        <h3>Take a dependency</h3>
+        <p>PDF text extraction, scanned-page images, vector search, hashing and
+        the HTTP server are all written against what Node already ships. Every
+        dependency is a thing that can break, change licence, or be taken over.</p>
+      </div>
+    </div>
+    <p class="note" style="margin-top:20px">
+      <strong>And it says where it is weak.</strong> Fax-encoded scans cannot be
+      read. Concepts are the shallowest entity kind. The Claude adapter is written
+      and has never run against the live API. Nobody has used this daily for a
+      month. The full list lives in <a href="https://github.com/Nulfied/Chitraq/blob/main/docs/STATUS.md">STATUS</a> and is kept
+      current rather than trimmed.
+    </p>
+  </div>
+</section>
+
+<section id="docs">
+  <div class="wrap">
+    <h2>Read further</h2>
+    <div class="grid cols-3">
+      <div class="card">
+        <h3><a href="https://github.com/Nulfied/Chitraq/blob/main/docs/STATUS.md">Status</a></h3>
+        <p>What is implemented, what is partial, what is deliberately not built —
+        with an honest weaknesses section and every measurement on this page.</p>
+      </div>
+      <div class="card">
+        <h3><a href="https://github.com/Nulfied/Chitraq/blob/main/docs/INVARIANTS.md">Invariants</a></h3>
+        <p>The sixty rules the code is built to hold, each naming where it is
+        enforced and the test that proves it.</p>
+      </div>
+      <div class="card">
+        <h3><a href="https://github.com/Nulfied/Chitraq/blob/main/docs/ARCHITECTURE.md">Architecture</a></h3>
+        <p>How capture, retrieval, context and the intelligence fabric fit
+        together, and why the boundaries fall where they do.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p style="margin:0 0 8px">
+      <strong style="color:var(--fg)">Chitraq</strong> — the memory engine for everyone.
+      <a href="https://github.com/Nulfied/Chitraq">Source</a> ·
+      <a href="https://github.com/Nulfied/Chitraq/blob/main/CONTRIBUTING.md">Contribute</a> ·
+      <a href="https://github.com/Nulfied/Chitraq/blob/main/LICENSE">AGPL-3.0</a>
+    </p>
+    <p style="margin:0">
+      Use it, change it, self-host it, take your data elsewhere. If you run a
+      modified version as a network service, publish your changes so its users
+      have what you have.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>
