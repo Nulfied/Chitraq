@@ -67,10 +67,14 @@ jobs:
           npm test 2>&1 | tee test-output.txt
           code=${PIPESTATUS[0]}
           if [ "$code" -ne 0 ]; then
-            echo "--- failures ---"
-            grep -E "^(not ok|# fail|# pass|# tests)" test-output.txt | head -40
-            summary=$(grep -E "^not ok" test-output.txt | head -10 | tr '\n' ' ')
-            echo "::error::${summary:-npm test exited $code with no failing test reported}"
+            # The whole tail, not a clever pattern. Node's reporter differs
+            # between a TTY and a pipe, and a grep written for the wrong one
+            # reports "no failing test" about a run full of them — which is
+            # exactly what happened the first time this was written.
+            echo "--- last 80 lines ---"
+            tail -80 test-output.txt
+            summary=$(grep -aE "(FAIL|failing tests|Error:|Cannot find|not ok)" test-output.txt | head -8 | tr '\n' ' ')
+            echo "::error::${summary:-see the uploaded artifact; exit was $code}"
           fi
           exit "$code"
 
