@@ -219,10 +219,21 @@ test('a failed capture does not end the watch', async (t) => {
 test('stopping is immediate and waits for work already started', async (t) => {
   const root = await folder();
   let finished = false;
+
+  // Wait for the capture to actually begin rather than sleeping and assuming
+  // it has. The sleep version passed here and failed on CI, where a slower
+  // filesystem pushed the event past the window — so it was asserting about
+  // the clock, not about stopping.
+  let began;
+  const capturing = new Promise((resolve) => {
+    began = resolve;
+  });
+
   const watcher = watchFolder({
     root,
     settleMs: QUICK,
     capture: async () => {
+      began();
       await new Promise((r) => setTimeout(r, QUICK * 4));
       finished = true;
       return { captured: [] };
@@ -231,7 +242,7 @@ test('stopping is immediate and waits for work already started', async (t) => {
   t.after(() => rm(root, { recursive: true, force: true }));
 
   await writeFile(join(root, 'note.md'), 'content');
-  await idle(QUICK * 2);
+  await capturing;
 
   watcher.stop();
   await watcher.done;
