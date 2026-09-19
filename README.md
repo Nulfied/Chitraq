@@ -1,5 +1,7 @@
 # Chitraq
 
+[![tests](https://github.com/Nulfied/Chitraq/actions/workflows/ci.yml/badge.svg)](https://github.com/Nulfied/Chitraq/actions/workflows/ci.yml)
+
 **The memory engine for everyone.** One memory, many intelligences.
 
 Chitraq is a persistent computational memory: it captures what you learn,

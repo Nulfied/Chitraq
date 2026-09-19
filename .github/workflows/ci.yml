@@ -1,0 +1,82 @@
+# Continuous integration.
+#
+# There is no install step because there is nothing to install: Chitraq has no
+# dependencies and `node:sqlite` ships with Node. That is also why the last job
+# exists — the zero-dependency claim is made in the README, in CONTRIBUTING.md
+# and on the landing page, so something should fail when it stops being true.
+#
+# Windows is in the matrix on purpose rather than for completeness. The one
+# platform-specific crash found so far was a libuv assertion in recursive
+# `fs.watch` that aborts the whole process on 8.3 short paths — the kind of
+# thing only a real Windows runner catches.
+
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to the same branch makes the previous run irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: tests · node ${{ matrix.node }} · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should still report the other, rather than
+      # cancelling it and hiding whether the problem is platform-specific.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: ['24']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Node and SQLite versions
+        # Recorded in the log because `node:sqlite` is the one thing this
+        # project genuinely depends on, and "which SQLite was that?" is
+        # otherwise unanswerable when a future runner image changes it.
+        run: |
+          node --version
+          node -e "const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(':memory:');console.log('sqlite', db.prepare('select sqlite_version() v').get().v);"
+
+      - name: Test
+        # No models are installed here, and that is the point: the
+        # deterministic provider is the floor the whole system stands on, so
+        # the suite has to pass with nothing else present.
+        run: npm test
+
+  dependencies:
+    name: still has no dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check package.json
+        run: |
+          node -e "
+            const pkg = require('./package.json');
+            const deps = Object.keys(pkg.dependencies ?? {});
+            const dev  = Object.keys(pkg.devDependencies ?? {});
+            if (deps.length || dev.length) {
+              console.error('Chitraq declares zero dependencies. Found:');
+              for (const d of [...deps, ...dev]) console.error('  ' + d);
+              console.error('');
+              console.error('If this is deliberate, say why in the pull request');
+              console.error('and change this check in the same commit.');
+              process.exit(1);
+            }
+            console.log('zero dependencies, as advertised');
+          "
