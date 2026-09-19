@@ -250,6 +250,65 @@ keys are.
 
 ---
 
+## Using it from your other projects
+
+Chitraq is a memory your other programs can share. Start the server, mint a
+token for each program, and talk to it over HTTP.
+
+```bash
+chitraq tokens --new formfit --scope write
+```
+
+The token is shown once. Put it in that project's environment:
+
+```js
+import { ChitraqClient } from 'chitraq/client';
+
+const memory = new ChitraqClient({
+  url: 'http://127.0.0.1:4317',
+  token: process.env.CHITRAQ_TOKEN,
+});
+
+await memory.remember({
+  title: 'FormFit compresses PDFs in the browser',
+  body: 'So exam form uploads never leave the device.',
+  kind: 'decision',
+});
+
+const answer = await memory.ask('why do we compress client-side');
+```
+
+The client is one file with no dependencies. It never caches and never retries
+blindly: a memory client that quietly returns a stale answer is worse than one
+that says the server is down, because you cannot tell a remembered fact from a
+remembered *response*. `ChitraqUnreachable` and `ChitraqError` are separate
+types so you can tell "nothing answered" from "it answered and said no".
+
+### What a token is actually for
+
+On one machine a token cannot make access harder to obtain — anything running
+there could call the API anyway. What it does is make access **narrower**:
+
+> Presenting a token constrains you. Presenting nothing changes nothing.
+
+A `read` token is refused a write *even where an anonymous caller would be
+allowed one*. So a dashboard or a side project can hold a credential that
+genuinely cannot damage the memory it reads from, and that holds whether or not
+you have configured a login.
+
+| scope | may |
+|---|---|
+| `read` | search, ask, recall, timeline, entities, concepts |
+| `write` | all of read, plus capture, relate and review |
+| `admin` | everything, including erase, export, sync and credentials |
+
+Tokens are stored as a hash and a six-character prefix, so a listing can say
+*which* token without being able to reproduce it. Revoking keeps the record
+that it existed — after deciding something should not have had access, knowing
+what did is the thing you want most.
+
+---
+
 ## Watching a folder
 
 ```bash

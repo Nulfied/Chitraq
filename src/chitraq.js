@@ -29,6 +29,7 @@ import * as transfer from './core/transfer.js';
 import * as auth from './core/auth.js';
 import * as keys from './core/keys.js';
 import * as vault from './core/vault.js';
+import * as tokens from './core/tokens.js';
 import * as sync from './core/sync.js';
 import { httpPeer, isRemoteHost } from './core/sync-http.js';
 import * as relations from './core/relations.js';
@@ -239,6 +240,64 @@ export class Chitraq {
       active: !failure && load.registered.includes(keyedIdFor(input.provider)),
       error: failure?.error ?? null,
     };
+  }
+
+  // ------------------------------------------------- tokens for programs
+
+  /**
+   * Mint a token for another program of yours.
+   *
+   * The plaintext comes back once. Chitraq keeps a hash and a prefix, so it
+   * can recognise the token later and can never reproduce it.
+   *
+   * @param {{name: string, scope?: string, expiresInDays?: number, note?: string}} input
+   */
+  issueToken(input) {
+    const result = tokens.issue(this.db, { ...input, principalId: this.principal.id });
+
+    events.emit(this.db, {
+      workspaceId: this.workspaceId,
+      type: events.EventType.CredentialChanged,
+      subjectKind: 'principal',
+      subjectId: this.principal.id,
+      actor: this.actor,
+      // The name and the scope, never the token.
+      payload: { action: 'token-issued', name: result.name, scope: result.scope },
+    });
+    return result;
+  }
+
+  /** Tokens that exist, masked. */
+  tokens() {
+    return tokens.list(this.db);
+  }
+
+  /** @param {{id?: string, name?: string}} q */
+  revokeToken(q) {
+    const result = tokens.revoke(this.db, q);
+    events.emit(this.db, {
+      workspaceId: this.workspaceId,
+      type: events.EventType.CredentialChanged,
+      subjectKind: 'principal',
+      subjectId: this.principal.id,
+      actor: this.actor,
+      payload: { action: 'token-revoked', name: result.name },
+    });
+    return result;
+  }
+
+  /**
+   * @param {string|null} token
+   * @returns {{id: string, name: string, scope: string, principalId: string}|null}
+   */
+  verifyToken(token) {
+    if (!tokens.looksLikeToken(token)) return null;
+    return tokens.verify(this.db, token);
+  }
+
+  /** @param {string} held @param {string} required */
+  tokenPermits(held, required) {
+    return tokens.permits(held, required);
   }
 
   // ----------------------------------------------------------- the vault

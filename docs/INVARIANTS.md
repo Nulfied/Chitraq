@@ -402,6 +402,26 @@ which is a corrupted memory rather than a missing one.
 · `capture/watch.js`
 · *a file still being written is not read half-finished*
 
+**58. An access token is shown once and stored as a hash.**
+Issuing is the only moment the plaintext exists outside the caller's hands.
+The listing returns a six-character prefix, the HTTP API has no route that
+reads one back, and the event log records the name and scope, never the token.
+· `core/tokens.js`, `server/http.js` route `/api/tokens`
+· *a token is returned once and never again*
+
+**59. Holding a token can only narrow what you may do.**
+A scoped token is refused work beyond its scope even where an anonymous caller
+on the same install would be permitted it. Access is never widened by
+presenting a credential, so a token is always safe to hand to a small program.
+· `server/http.js` request handler
+· *a read token is refused a write, where anonymous would be allowed*
+
+**60. A route nobody classified costs a write, not a read.**
+Route scopes default from the method and are overridden by an explicit list.
+Forgetting to classify a new route fails closed.
+· `server/http.js#scopeFor`
+· *write does not reach the routes that destroy or grant*
+
 ---
 
 ## Changing an invariant

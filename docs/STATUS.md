@@ -5,7 +5,7 @@ What is actually built, what is partial, and what is deliberately not built.
 States: **IMPLEMENTED** (built and tested), **PARTIAL** (works, with a stated
 limit), **NOT BUILT** (deliberately deferred).
 
-Last updated: 2026-09-18. 309 tests passing.
+Last updated: 2026-09-19. 326 tests passing.
 
 ---
 
@@ -203,6 +203,33 @@ reported on the Status screen; not automatic.
 The partials are honest ones: the bytes are always stored, and the capability
 that would unlock them is named rather than silently doing nothing.
 
+### Reaching Chitraq from another program
+
+`chitraq tokens --new <name>` mints a scoped credential, and `chitraq/client`
+is a dependency-free class other projects import. Together they make one
+memory usable by several programs.
+
+The rule that makes a token meaningful on a loopback install, where anything on
+the machine could call the API anyway:
+
+> **Presenting a token constrains you. Presenting nothing changes nothing.**
+
+A `read` token is refused a write even where an anonymous caller is allowed
+one. That is what lets a side project hold a credential which cannot damage the
+memory it reads.
+
+Route scopes are derived from the method — GET reads, anything else writes —
+with an explicit override list for reads that need a body (`ask`, `search`) and
+for the routes that destroy or grant (`erase`, `export`, `sync`, `keys`,
+`tokens`). The bias in the default is deliberate: a route nobody classified is
+treated as a write, never a read.
+
+The client never caches and never retries blindly, because a memory client that
+silently returns a stale answer leaves the caller unable to tell a remembered
+fact from a remembered response. `remember` can be told to queue while the
+server is away; that queue is in memory, opt-in, and reports `queued: true`
+rather than pretending the capture succeeded.
+
 ### Reading scanned PDFs
 
 This corrects something this file previously claimed. It said a scanned PDF
@@ -270,7 +297,9 @@ says otherwise.
 
 | Capability | State | Notes |
 |---|---|---|
-| HTTP API | IMPLEMENTED | ~50 routes, loopback-only, auth-gated once an account exists |
+| HTTP API | IMPLEMENTED | ~55 routes, loopback-only, auth-gated once an account exists |
+| **Access tokens** | IMPLEMENTED | Scoped read/write/admin, hashed at rest, revocable, shown once |
+| **Client library** | IMPLEMENTED | `chitraq/client` — one file, no dependencies, Node or browser |
 | CLI | IMPLEMENTED | Works with no server |
 | Web interface | IMPLEMENTED | 11 views, light and dark |
 | **Folder watch** | IMPLEMENTED | `chitraq watch` — foreground, debounced, queued, stops with the terminal |

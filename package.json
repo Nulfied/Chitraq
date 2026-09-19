@@ -1,7 +1,7 @@
 {
   "name": "chitraq",
   "version": "0.1.0",
-  "description": "Chitraq — the memory engine for everyone. One memory, many intelligences.",
+  "description": "Chitraq \u2014 the memory engine for everyone. One memory, many intelligences.",
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -17,5 +17,25 @@
     "check": "node --check src/server/serve.js"
   },
   "dependencies": {},
-  "devDependencies": {}
+  "devDependencies": {},
+  "exports": {
+    ".": "./src/chitraq.js",
+    "./client": "./src/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "web",
+    "docs",
+    "README.md"
+  ],
+  "keywords": [
+    "memory",
+    "knowledge",
+    "local-first",
+    "sqlite",
+    "embeddings",
+    "retrieval",
+    "ollama"
+  ]
 }

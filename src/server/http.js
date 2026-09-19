@@ -21,6 +21,53 @@ const WEB_ROOT = resolve(HERE, '../../web');
 const PUBLIC_ROUTES = new Set(['/api/health', '/api/auth/status', '/api/auth/login']);
 
 /**
+ * What a route costs, for a caller holding a scoped access token.
+ *
+ * The default is derived from the method — GET reads, anything else writes —
+ * because a table listing sixty routes is a table that goes stale the first
+ * time somebody adds one and forgets. Only the exceptions are written down:
+ * reads that arrive as POST because they carry a body, and the handful of
+ * routes that can destroy something or change who has access.
+ *
+ * The bias in the default matters: a route nobody classified is treated as a
+ * write, never as a read.
+ */
+const SCOPE_OVERRIDES = new Map([
+  // Reads that need a request body.
+  ['POST /api/search', 'read'],
+  ['POST /api/ask', 'read'],
+  ['POST /api/vector-index/benchmark', 'read'],
+
+  // Destroys knowledge, or decides who may reach it.
+  ['DELETE /api/objects/:id', 'admin'],
+  ['POST /api/policy', 'admin'],
+  ['POST /api/budget', 'admin'],
+  ['GET /api/keys', 'admin'],
+  ['POST /api/keys', 'admin'],
+  ['DELETE /api/keys/:provider', 'admin'],
+  ['POST /api/keys/lock', 'admin'],
+  ['POST /api/keys/unlock', 'admin'],
+  ['POST /api/keys/relock', 'admin'],
+  ['GET /api/tokens', 'admin'],
+  ['POST /api/tokens', 'admin'],
+  ['DELETE /api/tokens/:id', 'admin'],
+  ['GET /api/auth/sessions', 'admin'],
+  ['POST /api/auth/logout', 'admin'],
+  ['GET /api/export', 'admin'],
+  ['POST /api/import', 'admin'],
+  ['GET /api/sync/changes', 'admin'],
+  ['POST /api/sync/apply', 'admin'],
+]);
+
+/**
+ * @param {string} method
+ * @param {string} path  the route's declared shape, not the request's URL
+ */
+function scopeFor(method, path) {
+  return SCOPE_OVERRIDES.get(`${method} ${path}`) ?? (method === 'GET' ? 'read' : 'write');
+}
+
+/**
  * Read a bearer token from the Authorization header, or the session cookie.
  * @param {import('node:http').IncomingMessage} req
  */
@@ -50,7 +97,7 @@ export function createApp(chitraq, opts = {}) {
     const pattern = new RegExp(
       `^${path.replace(/:[a-zA-Z]+/g, (m) => `(?<${m.slice(1)}>[^/]+)`)}/?$`
     );
-    routes.push({ method, pattern, handler });
+    routes.push({ method, pattern, handler, path, scope: scopeFor(method, path) });
   };
 
   // ------------------------------------------------------------- system
@@ -296,6 +343,24 @@ export function createApp(chitraq, opts = {}) {
 
   route('GET', '/api/auth/sessions', () => chitraq.sessions());
 
+  // ---------------------------------------------- tokens for your programs
+  //
+  // The plaintext is in the response to the POST that creates it and nowhere
+  // else, ever. Listing returns a prefix.
+
+  route('GET', '/api/tokens', () => ({ tokens: chitraq.tokens() }));
+
+  route('POST', '/api/tokens', ({ body }) =>
+    chitraq.issueToken({
+      name: body.name,
+      scope: body.scope,
+      expiresInDays: body.expiresInDays,
+      note: body.note,
+    })
+  );
+
+  route('DELETE', '/api/tokens/:id', ({ params }) => chitraq.revokeToken({ id: params.id }));
+
   // ------------------------------------------------------- your own keys
   //
   // There is no route that reads a key back. Storing one is write-only by
@@ -347,11 +412,32 @@ export function createApp(chitraq, opts = {}) {
         );
         if (!match) return send(res, 404, { error: `No route ${req.method} ${url.pathname}` });
 
+        const credential = bearer(req);
+        const isPublic = PUBLIC_ROUTES.has(url.pathname);
+
+        // An access token is a *narrowing*, not a key to the door. Presenting
+        // one restricts the caller to its scope even where an anonymous caller
+        // on a loopback install would be allowed more — so a side project can
+        // hold something that genuinely cannot erase anything.
+        const token = chitraq.verifyToken(credential);
+        if (token && !isPublic) {
+          if (!chitraq.tokenPermits(token.scope, match.scope)) {
+            return send(res, 403, {
+              error:
+                `The "${token.name}" token is scoped to ${token.scope}, and this needs ` +
+                `${match.scope}.`,
+              kind: 'Forbidden',
+              scope: { held: token.scope, required: match.scope },
+            });
+          }
+        }
+
         // Authentication is enforced only once an account exists. A local
         // single-user install is reached over loopback and needs no login;
-        // the moment someone creates an account, every route needs one.
-        if (chitraq.authEnabled && !PUBLIC_ROUTES.has(url.pathname)) {
-          const principal = chitraq.authenticate(bearer(req));
+        // the moment someone creates an account, every route needs one — and
+        // a valid access token is one of the ways to satisfy that.
+        if (chitraq.authEnabled && !isPublic && !token) {
+          const principal = chitraq.authenticate(credential);
           if (!principal) {
             return send(res, 401, { error: 'Sign in to reach this memory.', kind: 'Unauthorized' });
           }

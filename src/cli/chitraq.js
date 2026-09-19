@@ -42,6 +42,7 @@ const COMMANDS = {
   sync: { args: '<url>', help: 'Exchange changes with another Chitraq. Use --push, --pull, --dry-run.' },
   peers: { args: '', help: 'Machines this memory has exchanged changes with.' },
   keys: { args: '', help: 'API keys you have supplied. Add with --set, remove with --remove.' },
+  tokens: { args: '', help: 'Let your other programs in. --new <name>, --revoke <name>.' },
   status: { args: '', help: 'What memory holds and which intelligence is available.' },
   reindex: { args: '', help: 'Rebuild every derived index from the objects.' },
   export: { args: '', help: 'Print the whole workspace as JSON.' },
@@ -419,6 +420,56 @@ async function run(command, rest, flags, c) {
 
       const final = watcher.state();
       console.log(`  captured    ${final.captured} file(s) while watching\n`);
+      break;
+    }
+
+    case 'tokens': {
+      if (flags.revoke) {
+        const revoked = c.revokeToken({ name: String(flags.revoke) });
+        console.log(
+          revoked.alreadyRevoked
+            ? `\n  "${revoked.name}" was already revoked\n`
+            : `\n  revoked "${revoked.name}" \u2014 it stops working immediately\n`
+        );
+        break;
+      }
+
+      if (flags.new) {
+        const issued = c.issueToken({
+          name: String(flags.new),
+          scope: String(flags.scope ?? 'read'),
+          expiresInDays: flags.days ? Number(flags.days) : undefined,
+          note: flags.note,
+        });
+
+        console.log(`\n  ${issued.token}`);
+        console.log(`\n  name        ${issued.name}`);
+        console.log(`  scope       ${issued.scope} \u2014 ${SCOPE_MEANS[issued.scope]}`);
+        console.log(`  expires     ${issued.expiresAt ?? 'never'}`);
+        // Said plainly, because it is true and because the usual mistake is
+        // assuming it can be looked up again later.
+        console.log(`\n  Copy it now. Chitraq keeps a hash and cannot show it to you again.`);
+        console.log(`  Put it in the other project as CHITRAQ_TOKEN.\n`);
+        break;
+      }
+
+      const issued = c.tokens();
+      if (!issued.length) {
+        console.log(`\n  No tokens. Your other programs reach this memory over HTTP:`);
+        console.log(`\n    chitraq tokens --new formfit --scope write`);
+        console.log(`\n  A token narrows what the holder may do. Presenting none changes`);
+        console.log(`  nothing, so this is for scoping a program down, not letting it in.\n`);
+        break;
+      }
+      console.log('');
+      for (const token of issued) {
+        const state = token.revokedAt ? 'revoked' : token.active ? token.scope : 'expired';
+        console.log(`  ${token.name.padEnd(20)} ${token.masked.padEnd(14)} ${state}`);
+        console.log(
+          `    ${dim(`used ${token.useCount} time(s)${token.lastUsed ? `, last ${token.lastUsed}` : ''}`)}`
+        );
+      }
+      console.log('');
       break;
     }
 
@@ -824,6 +875,12 @@ function usage(code = 0) {
     --why           show why each search result ranked where it did
     --context       show the context an answer was built from
 
+  Options for 'tokens'
+    --new <name>    mint a token for a program, e.g. --new formfit
+    --scope <s>     read (default), write, or admin
+    --days <n>      expire after this many days; omitted means never
+    --revoke <name> stop a token working, keeping the record it existed
+
   Options for 'keys'
     --set <provider>   store a key, read from the CHITRAQ_KEY variable
     --remove <provider>  forget a stored key
@@ -857,6 +914,7 @@ function usage(code = 0) {
     chitraq ask "why did we drop the redis cache"
     chitraq review
     chitraq sync http://192.168.1.20:4317 --dry-run
+    chitraq tokens --new my-other-app --scope write
 `);
   process.exitCode = code;
 }
@@ -974,6 +1032,13 @@ function describeCounts(counts) {
     .map(([k, n]) => `${n} ${k}`);
   return parts.length ? parts.join(', ') : 'nothing';
 }
+
+/** What each scope actually permits, in the words the help uses. */
+const SCOPE_MEANS = {
+  read: 'search, ask, recall',
+  write: 'all of read, plus capture and review',
+  admin: 'everything, including erase and credentials',
+};
 
 /** Wall-clock time, so a long watch reads as a log rather than a wall. */
 function stamp() {
