@@ -79,7 +79,9 @@ jobs:
             # of failures. Artifacts and logs need a login; annotations do
             # not, so the names belong here.
             names=$(grep -a '✖' test-output.txt | head -12 | tr '\n' '~')
-            counts=$(grep -aE '^. (tests|pass|fail) ' test-output.txt | tr '\n' ' ')
+            # Not anchored with `^.` — the reporter prefixes these with a
+            # multibyte glyph, which one `.` does not match in byte mode.
+            counts=$(grep -aE '(tests|pass|fail) [0-9]+$' test-output.txt | tr '\n' ' ')
             echo "::error::${counts} :: ${names:-no marked failures; exit was $code}"
           fi
           exit "$code"
