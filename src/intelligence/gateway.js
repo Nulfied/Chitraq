@@ -649,6 +649,19 @@ export function conflicts(db, opts) {
   const args = [opts.workspaceId];
   if (opts.status) { where.push('c.status = ?'); args.push(opts.status); }
 
+  // A disagreement between things you have since retired is not a
+  // disagreement you still have. Deleting either side closes the question,
+  // so an open conflict about deleted knowledge is noise sitting in front of
+  // the ones that still need a decision.
+  //
+  // Filtered at read time rather than resolved on delete: the conflict record
+  // stays exactly as it was, which keeps "what did this look like in March"
+  // answerable, and `includeRetired` brings them back.
+  if (!opts.includeRetired) {
+    where.push("(a.state IS NULL OR a.state != 'deleted')");
+    where.push("(b.state IS NULL OR b.state != 'deleted')");
+  }
+
   return plainAll(
     db
       .prepare(

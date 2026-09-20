@@ -474,3 +474,23 @@ test('derived attributes apply without waiting for a person', async (t) => {
     'and none of them are waiting'
   );
 });
+
+test('a conflict about retired knowledge stops being asked about', async (t) => {
+  const c = new Chitraq({ path: ':memory:' });
+  t.after(() => c.close());
+
+  const a = await c.remember({ title: 'Trial', body: 'The trial lasts 14 days.' });
+  const b = await c.remember({ title: 'Trial again', body: 'The trial lasts 30 days.' });
+
+  const open = c.conflicts();
+  assert.ok(open.length > 0, 'the disagreement was noticed');
+
+  // Retiring either side settles the question. Leaving it open puts noise in
+  // front of the conflicts that still need a decision.
+  c.forget(b.object.id, 'superseded measurement');
+  assert.equal(c.conflicts().length, 0, 'no longer asked about');
+
+  // The record itself is untouched, so the history stays answerable.
+  assert.ok(c.conflicts({ includeRetired: true }).length > 0, 'still on file');
+  assert.ok(c.recall(a.object.id), 'and the surviving side is fine');
+});

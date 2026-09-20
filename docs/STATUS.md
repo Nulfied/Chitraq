@@ -5,7 +5,7 @@ What is actually built, what is partial, and what is deliberately not built.
 States: **IMPLEMENTED** (built and tested), **PARTIAL** (works, with a stated
 limit), **NOT BUILT** (deliberately deferred).
 
-Last updated: 2026-09-20. 344 tests passing.
+Last updated: 2026-09-20. 345 tests passing.
 
 ---
 
@@ -346,8 +346,13 @@ says otherwise.
    control that does nothing. Review by source is the workable path until a
    model that discriminates is available.
 5. **Contradiction detection is narrow.** Conflicting figures about the same
-   subject, and negated restatements. It misses most real contradictions, and is
-   tuned for precision because a false "these disagree" is expensive to read.
+   subject, and negated restatements. It misses most real contradictions, and
+   is tuned for precision because a false "these disagree" is expensive to
+   read. It also misses pairs a person would call obvious — `p99 latency at
+   38ms` against `88ms` does not fire, while `the trial lasts 14 days` against
+   `30 days` does, because the surrounding words have to match closely enough.
+   On real documents it did find a genuine one: a README claiming Node 22.5
+   against an engines field of 24.
 6. **Concurrency is SQLite WAL and nothing more.** Fine for one user and one
    process. A multi-user server needs work not yet done.
 7. **Nothing watches anything unless you start it.** `chitraq watch` is a
