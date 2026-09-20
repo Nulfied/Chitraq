@@ -270,3 +270,51 @@ test('a table row is not a claim', async (t) => {
   }
   assert.ok(result.proposals.length >= 2, 'the real sentences were still captured');
 });
+
+test('configuration and code are not claims, so they are not concepts', async (t) => {
+  // 23 of 437 stored claims on a real corpus were TOML, Lua or HTML comments
+  // from fenced blocks in editor READMEs. Tokenised as prose they produced
+  // the recurring "concept" `start end close true newline`, which came from
+  // `brackets start = "(" end = ")" close = true newline = false`.
+  const c = new Chitraq({ path: ':memory:' });
+  t.after(() => c.close());
+
+  const block = (i) =>
+    `Editor ${i}\n\nbrackets start = "(" end = ")" close = true newline = false\n\n` +
+    `[language-server.halka] command = "halka" args = ["lsp"]\n\n` +
+    `local lspconfig = require("lspconfig")\n\n` +
+    `Memory safety is a compiler guarantee in every one of these editors.\n\n`;
+
+  for (let i = 0; i < 4; i++) {
+    await c.ingest({ text: block(i), filename: `editor-${i}.md`, uri: `file:///e/${i}.md` });
+  }
+
+  for (const phrase of c.concepts().map((k) => k.phrase)) {
+    assert.ok(
+      !/start end|close true|newline|lspconfig|command args/.test(phrase),
+      `"${phrase}" came out of a config block`
+    );
+  }
+
+  // And the one real sentence in there still counts.
+  const titles = c.pending().map((p) => {
+    const payload = typeof p.payload === 'string' ? JSON.parse(p.payload) : p.payload;
+    return payload.title ?? '';
+  });
+  assert.ok(titles.some((t2) => t2.includes('compiler guarantee')), 'the prose survived');
+});
+
+test('an adverb does not begin a concept', async (t) => {
+  const c = new Chitraq({ path: ':memory:' });
+  t.after(() => c.close());
+
+  await fill(c, [
+    ['A', 'Only narrow checks are run, and only narrow ones matter here.'],
+    ['B', 'Only narrow checks again, because only narrow is the rule.'],
+    ['C', 'We keep only narrow checks, only narrow and nothing more.'],
+  ]);
+
+  for (const phrase of c.concepts().map((k) => k.phrase)) {
+    assert.ok(!phrase.startsWith('only '), `"${phrase}" is a fragment`);
+  }
+});

@@ -44,6 +44,7 @@ const EDGE_NOISE = new Set([
   'have', 'has', 'had', 'will', 'would', 'should', 'could', 'may', 'might', 'must',
   'get', 'got', 'make', 'made', 'use', 'used', 'using', 'go', 'going', 'went',
   'very', 'really', 'quite', 'just', 'also', 'still', 'now', 'then', 'here', 'there',
+  'only', 'even', 'never', 'always', 'often', 'rather', 'else', 'simply', 'merely',
   'one', 'two', 'three', 'first', 'last', 'next', 'new', 'old', 'more', 'most',
   'good', 'bad', 'big', 'small', 'own', 'same', 'other', 'another', 'much', 'many',
   // Modals and vague nouns. Each ended a fabricated concept on a real

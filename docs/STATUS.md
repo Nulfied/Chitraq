@@ -5,7 +5,7 @@ What is actually built, what is partial, and what is deliberately not built.
 States: **IMPLEMENTED** (built and tested), **PARTIAL** (works, with a stated
 limit), **NOT BUILT** (deliberately deferred).
 
-Last updated: 2026-09-20. 350 tests passing.
+Last updated: 2026-09-20. 352 tests passing.
 
 ---
 
@@ -366,24 +366,28 @@ says otherwise.
    foreground command that dies with the terminal. Sync has no watch mode at
    all, and there is still no timer, no service and no background exchange.
 8. **Entity extraction is sparse on technical documentation.** Measured on a
-   real corpus of 27 project documents (460 objects): the first run produced
-   33 entities of which about four were real, because documentation is nothing
-   but Title Case and every capitalised run was read as a person. After
-   tightening — a name must be a positive shape, and articles, determiners,
-   conjunctions, verbs and question words disqualify one — it produces 8, of
-   which 4 are right, 1 is real but mistyped (`Sublime Text` as a person), and
-   3 are common nouns the product pattern caught (`Rules`, `Gate`,
-   `Provenance`). Better, still not good. Prose about people works far better
-   than documentation does; a model would do this properly.
-9. **Concepts are the weakest entity kind.** Measured on a real corpus, the
-   first run's strongest "concept" was `https github com nulfied` — a URL
-   tokenises into ordinary words, so a repeated link looks like a repeated
-   idea. Links, paths, code spans and table rows are now stripped before the
-   scan, and identifiers and bare verbs disqualify a phrase, which turned up
-   `memory safety`, `runtime dependencies`, `reference interpreter` and
-   `lifetime annotations` underneath. Roughly half of what it returns is
-   still fragments of tabular prose. It finds phrases you repeat, which is
-   not the same as ideas you hold. They are found by recurrence
+   real corpus of 27 project documents: the first run produced 33 entities of
+   which about four were real, because documentation is nothing but Title
+   Case and every capitalised run was read as a person. Successive rounds —
+   a name must be a positive shape; a version must be version-shaped, so "a
+   null Gate 2 outcome" is not a product; paths and code are stripped before
+   names are looked for — took it to 33 → 12 → 8 → **4, all four correct**
+   (`MSVC`, `Node`, `Windows`, `Halka`). Precise now, and sparse: it finds
+   what has an unambiguous shape and misses the rest. A model would find
+   more.
+9. **Concepts find phrases you repeat, not ideas you hold.** On a real
+   corpus the first run's strongest "concept" was `https github com nulfied`
+   — a URL tokenises into ordinary words, so a repeated link reads as a
+   repeated idea. Most of the rest was structure: 23 of 437 stored claims
+   were TOML, Lua or HTML comments out of fenced blocks, which produced
+   `start end close true newline` from a bracket-pairing config. Links,
+   paths, code, tables and configuration are now excluded upstream, and
+   identifiers, bare verbs and adverbs disqualify a phrase. What is left on
+   the same corpus is six, all six defensible: `memory safety`, `locked
+   rule`, `lifetime annotations`, `reference interpreter`, `runtime
+   dependencies`, `install step`. The definition is still shallow — a phrase
+   repeated across notes — and a corpus without that repetition yields
+   nothing. They are found by recurrence
    across separate notes, which is honest but shallow: it finds phrases you
    repeat, not ideas you hold. Everything it produces is a proposal, and
    confidence is capped well below the shape-based kinds.

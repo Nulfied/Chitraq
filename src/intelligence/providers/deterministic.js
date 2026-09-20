@@ -331,18 +331,40 @@ const ENTITY_PATTERNS = [
 ];
 
 /**
- * Is this a row from a table rather than a sentence?
+ * Is this structure rather than a sentence?
  *
- * Three or more cell separators, or the dashes that underline a header. Both
- * survive sentence splitting intact and look like prose to everything
- * downstream.
+ * Markdown documents are full of things that survive sentence splitting
+ * intact and then look like prose to everything downstream: table rows,
+ * fenced configuration, a line of Lua, an HTML comment. On a real corpus 23
+ * of 437 stored claims were one of these.
+ *
+ * The tests are about shape, not language, because guessing which language
+ * is a losing game and the shapes are few:
+ *
+ *   - cells separated by pipes, or a header underline
+ *   - more than one `key = value` on one line
+ *   - a comment marker from any of the usual syntaxes
+ *   - more punctuation than a sentence has any use for
  *
  * @param {string} sentence
  */
-function isTableRow(sentence) {
+function looksStructured(sentence) {
   const pipes = (sentence.match(/\|/g) ?? []).length;
-  if (pipes >= 3) return true;
-  return /\|\s*-{3,}/.test(sentence);
+  if (pipes >= 3 || /\|\s*-{3,}/.test(sentence)) return true;
+
+  // `command = "halka" args = ["lsp"]` is configuration. One `=` in a
+  // sentence is ordinary English ("x = 3 means"), two is a settings block.
+  if ((sentence.match(/[\w\]"']\s*=\s*[[{"'\w]/g) ?? []).length >= 2) return true;
+
+  if (/<!--|-->|^\s*(\/\/|--|#!)/.test(sentence)) return true;
+  if (/\b(require|function|const|local|import)\s*[({]/.test(sentence)) return true;
+  if (/={5,}|-{5,}/.test(sentence)) return true;
+
+  // Prose is mostly letters. Anything with this much punctuation is a
+  // structure that happens to contain words.
+  const letters = (sentence.match(/[a-z]/gi) ?? []).length;
+  const symbols = (sentence.match(/[=<>{}[\]|;:\\/"'`_*#+]/g) ?? []).length;
+  return letters > 0 && symbols / letters > 0.35;
 }
 
 /**
@@ -628,10 +650,11 @@ export function claims(text, limit = 12) {
     const terms = contentTerms(sentence);
     // Too short to stand alone, or too long to be one claim.
     if (terms.length < 4 || estimateTokens(sentence) > 120) continue;
-    // A table row is columns of values, not an assertion. Stored as a claim
-    // it reads as knowledge, gets embedded, and turns adjacent cells into
-    // recurring "concepts" like "start end close true newline".
-    if (isTableRow(sentence)) continue;
+    // Configuration and code are not assertions. Stored as claims they read
+    // as knowledge, get embedded, and turn adjacent tokens into recurring
+    // "concepts" like "start end close true newline" — which came from
+    // `brackets start = "(" end = ")" close = true newline = false`.
+    if (looksStructured(sentence)) continue;
     // Questions are captured as questions, not asserted as claims.
     const isQuestion = /\?\s*$/.test(sentence);
 
