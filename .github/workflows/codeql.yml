@@ -1,0 +1,72 @@
+# Static analysis.
+#
+# This is the advanced setup rather than the one GitHub configures for you,
+# and the reason is the same one behind STATUS.md and INVARIANTS.md: what the
+# project does to itself should be readable from a clone. Default setup lives
+# in a settings page, so somebody auditing this repository could not tell
+# what was scanned, with which queries, or how often. Here they can.
+#
+# It costs something. Default setup improves on its own as GitHub updates it,
+# and this file does not — if the action moves to v4, or a better query suite
+# appears, somebody has to notice. That trade is worth making for a project
+# holding people's notes and their API keys.
+#
+# `security-and-quality` is deliberate. The default suite is smaller; this one
+# adds maintainability and correctness queries on top of the security ones,
+# which suits a codebase where a quiet wrong answer is the failure that
+# matters most.
+#
+# There is no build step to configure because there is nothing to build: this
+# is plain JavaScript with no dependencies, so CodeQL reads the source as it
+# stands.
+#
+# Note for whoever turns this on: GitHub will not run both. If default setup
+# is enabled under Settings → Code security, this workflow is ignored until
+# that is switched off.
+
+name: codeql
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Weekly, because a query suite that improves finds things in code that has
+  # not changed. Early Monday, off the hour, to avoid the scheduling crush.
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyse:
+    name: analyse javascript
+    runs-on: ubuntu-latest
+
+    permissions:
+      # Writing results back to the Security tab is the entire point.
+      security-events: write
+      # Needed for private repositories; harmless here, and means this file
+      # keeps working if the repository is ever made private.
+      actions: read
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Initialise CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          queries: security-and-quality
+
+      - name: Analyse
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:javascript-typescript

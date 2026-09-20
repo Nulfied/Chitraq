@@ -103,6 +103,18 @@ without passing through it, and `ai` provenance is recorded on everything
 that does. A finding that a model can be *influenced* is expected; a finding
 that something bypassed the gateway is a real vulnerability.
 
+## What runs against this repository
+
+| | |
+|---|---|
+| **CodeQL** | `security-and-quality` queries on every push and pull request to `main`, and weekly. Configured in `.github/workflows/codeql.yml` rather than through GitHub's default setup, so what is scanned is readable from a clone. |
+| **Dependabot alerts** | Watches the dependency graph. There are no npm dependencies, so in practice this watches the GitHub Actions the workflows use — which is where the realistic supply-chain risk is. |
+| **Zero-dependency check** | A CI job fails if `package.json` ever declares a dependency, so the claim cannot quietly stop being true. |
+
+None of this replaces a report. Static analysis finds a category of bug and
+is blind to the ones that matter most here — a wrong answer presented as a
+remembered fact, or a credential reachable by a path nobody modelled.
+
 ## Secrets
 
 If you find a credential committed to this repository, report it privately
