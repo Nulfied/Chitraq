@@ -101,5 +101,73 @@ export function loadConfig(env = process.env) {
       maxCostMicros: Number(env.CHITRAQ_MAX_COST_MICROS || (allowPaid ? 10_000 : 0)),
       timeoutMs: Number(env.CHITRAQ_TIMEOUT_MS || 60_000),
     },
+    allowOpen: env.CHITRAQ_ALLOW_OPEN === 'true',
   };
+}
+
+/**
+ * Is this address reachable only from the machine it runs on?
+ *
+ * The whole of 127.0.0.0/8 is loopback, not just 127.0.0.1. `0.0.0.0` and
+ * `::` are the opposite of loopback — they mean every interface — and are
+ * the two people actually reach for when they want sync to work, which is
+ * exactly the case this exists to catch.
+ *
+ * @param {string} host
+ */
+export function isLoopbackHost(host) {
+  const h = String(host).trim().toLowerCase().replace(/^\[|\]$/g, '');
+  if (h === 'localhost' || h === '::1') return true;
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h);
+}
+
+/**
+ * Why this configuration must not be served, if it must not be.
+ *
+ * Authentication does not exist until an account does. That is a reasonable
+ * default for a memory reached only from the machine holding it, and it is
+ * the wrong default the moment the address changes — because nothing else
+ * stands between the network and the whole store.
+ *
+ * It is worth being precise about the size of that. An open port here does
+ * not expose "some notes": `GET /api/export` is the entire workspace,
+ * `GET /api/keys` lists the API keys, `GET /api/tokens` lists the
+ * credentials issued to other programs, and `DELETE /api/objects/:id`
+ * destroys knowledge. An access token cannot save it either, because a token
+ * narrows what a caller may do and is never demanded — an anonymous request
+ * is not a request with an empty scope, it is a request that skipped the
+ * check.
+ *
+ * So this refuses at startup rather than warning. A warning scrolls past in
+ * a terminal nobody is watching, and the failure it precedes is silent: the
+ * memory works perfectly while being readable by the network. Refusing costs
+ * one environment variable and happens at the moment the mistake is made.
+ *
+ * @param {{host: string, authEnabled: boolean, allowOpen?: boolean}} state
+ * @returns {string|null} the refusal, or null when serving is fine
+ */
+export function refuseToServe({ host, authEnabled, allowOpen = false }) {
+  if (authEnabled || allowOpen || isLoopbackHost(host)) return null;
+
+  return [
+    `Refusing to serve ${host} with no account.`,
+    '',
+    `  Chitraq asks for credentials once an account exists, and there is no`,
+    `  account here — so every route is open, including the whole-workspace`,
+    `  export, the list of stored API keys, and deleting knowledge. On`,
+    `  ${host} that is open to the network, not to you.`,
+    '',
+    '  Either of these fixes it:',
+    '',
+    '    create an account            open the web interface on 127.0.0.1 and',
+    '                                 sign up; every route then needs a login',
+    '                                 or an access token',
+    '',
+    '    keep it to this machine      unset CHITRAQ_HOST, or set it to 127.0.0.1',
+    '',
+    '  If the network this is on is genuinely trusted and you want it open',
+    '  anyway, say so explicitly:',
+    '',
+    '    CHITRAQ_ALLOW_OPEN=true',
+  ].join('\n');
 }

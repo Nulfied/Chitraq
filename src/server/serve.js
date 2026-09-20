@@ -10,7 +10,7 @@
 
 import { Chitraq } from '../chitraq.js';
 import { createApp } from './http.js';
-import { loadConfig } from '../config.js';
+import { loadConfig, refuseToServe } from '../config.js';
 
 const config = loadConfig();
 
@@ -24,6 +24,19 @@ const chitraq = new Chitraq({
   policy: config.policy,
   providers: config.providers,
 });
+
+// Checked before the socket opens, so a misconfigured install never accepts
+// a single request rather than serving until somebody notices.
+const refusal = refuseToServe({
+  host: config.host,
+  authEnabled: chitraq.authEnabled,
+  allowOpen: config.allowOpen,
+});
+if (refusal) {
+  console.error(`\n  ${refusal.split('\n').join('\n  ')}\n`);
+  chitraq.close();
+  process.exit(1);
+}
 
 const server = createApp(chitraq);
 
