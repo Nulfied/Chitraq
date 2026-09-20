@@ -10,8 +10,8 @@
  */
 
 import { createServer } from 'node:http';
-import { readFile, stat } from 'node:fs/promises';
-import { join, extname, normalize, resolve, dirname } from 'node:path';
+import { readFile, stat, realpath } from 'node:fs/promises';
+import { join, extname, normalize, resolve, dirname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -567,7 +567,7 @@ async function serveStatic(res, root, pathname) {
   const rel = normalize(decodeURIComponent(pathname)).replace(/^([/\\])+/, '');
   const target = resolve(root, rel === '' ? 'index.html' : rel);
 
-  if (!target.startsWith(resolve(root))) {
+  if (!within(resolve(root), target)) {
     res.writeHead(403).end('Forbidden');
     return;
   }
@@ -575,6 +575,17 @@ async function serveStatic(res, root, pathname) {
   try {
     const info = await stat(target);
     const file = info.isDirectory() ? join(target, 'index.html') : target;
+
+    // Checked again after resolving symbolic links, because the check above
+    // is about the path as written and a link is about where it goes. A
+    // symlink inside the web root pointing at ~/.ssh/id_rsa has a path that
+    // passes every string test and a destination that is not in the root at
+    // all. `resolve` does not follow links; `realpath` does.
+    if (!within(await realpath(resolve(root)), await realpath(file))) {
+      res.writeHead(403).end('Forbidden');
+      return;
+    }
+
     const data = await readFile(file);
     res.writeHead(200, {
       'content-type': MIME[extname(file)] ?? 'application/octet-stream',
@@ -596,6 +607,22 @@ async function serveStatic(res, root, pathname) {
       res.writeHead(404).end('Not found');
     }
   }
+}
+
+/**
+ * Is `target` the directory `root`, or something inside it?
+ *
+ * `target.startsWith(root)` is the obvious version and is wrong: with a root
+ * of `/srv/web` it also accepts `/srv/web-backup` and `/srv/website`, which
+ * are different directories that merely begin with the same letters. The
+ * separator is what makes it a containment test rather than a prefix test.
+ *
+ * @param {string} root    already resolved
+ * @param {string} target  already resolved
+ */
+export function within(root, target) {
+  if (target === root) return true;
+  return target.startsWith(root.endsWith(sep) ? root : root + sep);
 }
 
 /**

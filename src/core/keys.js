@@ -136,7 +136,25 @@ function fromFile(dir, env = process.env) {
 
   mkdirSync(home, { recursive: true });
   const generated = randomBytes(32).toString('base64');
-  writeFileSync(path, generated, { mode: 0o600 });
+
+  // `wx` fails rather than overwrites if the file appeared since the check
+  // above. That gap is small and the consequence of losing it is not: two
+  // Chitraq processes starting together — the CLI and the server, which is
+  // an ordinary thing to do — would each see no secret, each generate one,
+  // and the second write would replace the first. Every key sealed under the
+  // first secret becomes permanently unreadable, and nothing reports it,
+  // because a key that will not decrypt looks exactly like a key that was
+  // never stored.
+  try {
+    writeFileSync(path, generated, { mode: 0o600, flag: 'wx' });
+  } catch (err) {
+    if (/** @type {any} */ (err)?.code === 'EEXIST') {
+      // Somebody else won the race. Theirs is the real secret.
+      return { value: readFileSync(path, 'utf8').trim(), source: path };
+    }
+    throw err;
+  }
+
   try {
     // A no-op on Windows, where the file inherits the user profile's ACL. Worth
     // attempting rather than assuming.

@@ -253,13 +253,6 @@ export function ollamaProvider(opts = {}) {
   };
 }
 
-const KINDS = new Set([
-  'note', 'fact', 'concept', 'decision', 'observation', 'question',
-  'hypothesis', 'lesson', 'event', 'entity', 'artifact', 'task',
-]);
-const EPISTEMICS = new Set([
-  'fact', 'observation', 'belief', 'hypothesis', 'inference', 'conclusion', 'speculation',
-]);
 
 const LOCAL_ANSWER_SYSTEM = `You answer questions using the material provided, which comes from the user's own notes.
 
@@ -275,10 +268,3 @@ Never use knowledge from outside the material. Never guess. Write ids exactly as
 const LOCAL_EXTRACT_SYSTEM = `Split the text into separate pieces of knowledge worth remembering.
 
 Return each piece as one plain sentence. Each must make sense on its own and must say only what the text says — do not summarise, do not combine two points into one, do not add anything. Prefer the wording already there. Skip headings, table rows, navigation and filler. If there is nothing worth keeping, return an empty list.`;
-
-/** @param {unknown} n */
-function clamp(n) {
-  const v = Number(n);
-  if (Number.isNaN(v)) return null;
-  return Math.max(0, Math.min(1, v));
-}

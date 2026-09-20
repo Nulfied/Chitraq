@@ -289,7 +289,6 @@ export class Router {
    * @param {any} r
    */
   #record(r) {
-    const impl = r.provider.capabilities[r.capability];
     const row = {
       id: r.runId,
       workspace_id: r.workspaceId ?? 'unknown',

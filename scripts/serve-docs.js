@@ -14,8 +14,8 @@
  */
 
 import { createServer } from 'node:http';
-import { readFile, stat } from 'node:fs/promises';
-import { join, resolve, extname, normalize } from 'node:path';
+import { readFile, stat, realpath } from 'node:fs/promises';
+import { join, resolve, extname, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('../docs', import.meta.url)));
@@ -41,7 +41,7 @@ const server = createServer(async (req, res) => {
   // Checking the request string for ".." is the version of this that gets
   // bypassed by an encoded separator.
   const target = resolve(join(ROOT, normalize(pathname)));
-  if (!target.startsWith(ROOT)) {
+  if (!within(ROOT, target)) {
     res.writeHead(403).end('Outside the docs folder.');
     return;
   }
@@ -49,6 +49,13 @@ const server = createServer(async (req, res) => {
   try {
     const info = await stat(target);
     const file = info.isDirectory() ? join(target, 'index.html') : target;
+
+    // Again after following links, because `resolve` does not follow them.
+    if (!within(await realpath(ROOT), await realpath(file))) {
+      res.writeHead(403).end('Outside the docs folder.');
+      return;
+    }
+
     const body = await readFile(file);
     res.writeHead(200, {
       'content-type': TYPES[extname(file)] ?? 'application/octet-stream',
@@ -66,3 +73,20 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(`\n  docs  ${ROOT}`);
   console.log(`  at    http://127.0.0.1:${PORT}\n`);
 });
+
+/**
+ * Is `target` the directory `root`, or inside it?
+ *
+ * `startsWith` alone accepts a sibling whose name begins with the root's —
+ * `docs` and `docs-drafts` are different directories. The separator is what
+ * turns a prefix test into a containment test. Same fix as `serveStatic` in
+ * `src/server/http.js`, deliberately duplicated: a four-line guard is not
+ * worth a development script importing from the shipped code.
+ *
+ * @param {string} root    already resolved
+ * @param {string} target  already resolved
+ */
+function within(root, target) {
+  if (target === root) return true;
+  return target.startsWith(root.endsWith(sep) ? root : root + sep);
+}

@@ -108,10 +108,20 @@ export function parseMarkdown(raw, mediaType = 'text/markdown') {
     text: m[2].trim(),
     offset: m.index ?? 0,
   }));
-  const links = [...body.matchAll(/\[([^\]]+)\]\(([^)\s]+)[^)]*\)/g)].map((m) => ({
-    text: m[1],
-    href: m[2],
-  }));
+  // One `[^)]*` rather than `([^)\s]+)[^)]*`, with the href split out
+  // afterwards. Those two adjacent classes both matched the same characters,
+  // so on a link that is never closed the engine tried every way of dividing
+  // the tail between them. Quadratic, and not only in theory:
+  //
+  //     16 KB  0.10 s      64 KB  1.49 s      256 KB  27.26 s
+  //
+  // A megabyte took minutes. `chitraq ingest` walks folders of files nobody
+  // vetted, so this was reachable by a typo — one unclosed bracket in a long
+  // note — as easily as by anything deliberate. The replacement is linear:
+  // the same 256 KB now takes 1.3 ms.
+  const links = [...body.matchAll(/\[([^\]]+)\]\(([^)]*)\)/g)]
+    .map((m) => ({ text: m[1], href: m[2].split(/\s/)[0] }))
+    .filter((link) => link.href);
   const wikilinks = [...body.matchAll(/\[\[([^\]]+)\]\]/g)].map((m) => m[1].trim());
 
   const text = body
@@ -241,17 +251,39 @@ function flattenJson(value, prefix = '', depth = 0) {
 }
 
 /** @param {string} html */
+/** The named entities worth handling without pulling in a table of 2,231. */
+const ENTITIES = {
+  '&nbsp;': ' ',
+  '&amp;': '&',
+  '&lt;': '<',
+  '&gt;': '>',
+  '&quot;': '"',
+  '&#39;': "'",
+};
+
+/** @param {string} html */
 function stripTags(html) {
-  return html
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
-    .replace(/[ \t]{2,}/g, ' ');
+  return (
+    html
+      .replace(/<[^>]+>/g, ' ')
+      // One pass, not seven chained ones. Decoding `&amp;` before `&lt;`
+      // meant `&amp;lt;` became `&lt;` and then `<`: a document that wrote
+      // the literal text "&lt;" had a tag bracket stored instead. Anything
+      // written *about* escaping came out saying the opposite of itself, and
+      // a document could put markup back into text that had just had its
+      // markup stripped. A single pass cannot consume its own output.
+      .replace(/&(?:nbsp|amp|lt|gt|quot|#\d+);/g, (entity) => {
+        const known = ENTITIES[entity];
+        if (known !== undefined) return known;
+
+        const code = Number(entity.slice(2, -1));
+        // Basic Multilingual Plane only, and nothing in the control range: a
+        // numeric entity is not a licence to put a NUL into stored text.
+        if (!Number.isInteger(code) || code < 32 || code > 0xffff) return entity;
+        return String.fromCharCode(code);
+      })
+      .replace(/[ \t]{2,}/g, ' ')
+  );
 }
 
 /** @param {string} text */

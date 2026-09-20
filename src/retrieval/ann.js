@@ -356,18 +356,6 @@ function dot(a, b) {
   return sum;
 }
 
-/** @param {Float32Array} a @param {Float32Array} b @param {number} aNorm */
-function cosine(a, b, aNorm) {
-  let dot = 0;
-  let bSq = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    bSq += b[i] * b[i];
-  }
-  const denom = aNorm * Math.sqrt(bSq);
-  return denom === 0 ? 0 : dot / denom;
-}
-
 /** @param {Float32Array} v */
 function norm(v) {
   let s = 0;
