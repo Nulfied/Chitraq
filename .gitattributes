@@ -1,0 +1,13 @@
+# The CCITT fixtures are compressed fax streams and raw bitmaps. Git's own
+# heuristic currently calls all of them binary and a clone with
+# core.autocrlf=true was checked to corrupt none of them, so this changes
+# nothing today. It is here because the margin is thin: the heuristic is a
+# guess about content, one stream already contains no NUL byte at all, and
+# several contain 0x0A bytes inside the compressed data. Regenerate the
+# fixtures and that guess can go the other way.
+#
+# The failure it would cause is the expensive kind — the fixtures still
+# present, still the right size on disk, and the decoder failing on a Windows
+# runner and nowhere else. Saying "these are bytes" costs two lines.
+test/fixtures/ccitt/*.bin       binary
+test/fixtures/ccitt/*.expected  binary
