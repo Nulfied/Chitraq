@@ -204,11 +204,14 @@ source permanently records which capability, provider and model produced it, and
 every claim standing on it carries that doubt. Without a provider, nothing
 changes: the bytes are stored and the gap is named.
 
-Scanned PDFs work too. Their pages are embedded images, and for the format
-almost every scanner produces those bytes are already a JPEG — so Chitraq takes
-the file apart and reads each page with whatever reads images. Fax-encoded scans
-(`CCITTFaxDecode`, `JBIG2Decode`) still need a decoder this project does not
-have, and are named as unreadable rather than guessed at.
+Scanned PDFs work too. Every scanner app people actually use — Adobe Scan,
+CamScanner, Microsoft Lens, the camera on a phone — writes JPEG inside the
+PDF, and those bytes are already a complete image. Chitraq takes the file
+apart and reads each page with whatever reads images.
+
+Fax-encoded scans (`CCITTFaxDecode`) are the exception, and deliberately so:
+that is fax machines and old office copiers, not anything a scanner app
+produces today. They are named as unreadable rather than guessed at.
 
 ---
 

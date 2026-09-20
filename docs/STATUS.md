@@ -317,6 +317,14 @@ says otherwise.
   is registered, and coverage says so.
 - **Multi-user real-time collaboration.** Permissions and sync exist; presence,
   live cursors and operational transforms do not.
+- **Fax-encoded scans** (`CCITTFaxDecode`, `JBIG2Decode`). Every scanner app
+  people actually use — Adobe Scan, CamScanner, Microsoft Lens, the camera on
+  a phone — writes JPEG inside the PDF, and that path works: the page comes
+  out byte-for-byte and goes to a vision model. CCITT is fax machines and old
+  office copiers. Writing a decoder for it would also mean shipping one
+  nobody could verify without a real sample, and a subtly wrong decoder feeds
+  a vision model a scrambled page it will read confidently. Detected and
+  named instead.
 
 ## Honest weaknesses
 
@@ -391,20 +399,10 @@ says otherwise.
    across separate notes, which is honest but shallow: it finds phrases you
    repeat, not ideas you hold. Everything it produces is a proposal, and
    confidence is capped well below the shape-based kinds.
-10. **Fax-encoded scans still cannot be read, and this is a choice.**
-    `CCITTFaxDecode` (T.6) is a self-contained algorithm of a few hundred
-    lines and could be written here. It is not, because it could not be
-    *verified* here: checking a decoder needs a known-good encoded sample,
-    and one encoded with the same tables the decoder uses proves nothing —
-    a mistake in both cancels out. A decoder that silently produces a wrong
-    image would feed a vision model confident nonsense, which is worse than
-    the current honest refusal. With a real fax-encoded PDF to test against,
-    this becomes worth building. `JBIG2Decode` is a larger problem again.
-    Both are detected and named in the result, never guessed at.
-11. **An unlocked vault lives in process memory.** Something that can read this
+10. **An unlocked vault lives in process memory.** Something that can read this
    process can read the data key. Defending against that is a different order
    of problem and is not attempted.
-12. **Video depends on which speech server you run.** The file is posted to
+11. **Video depends on which speech server you run.** The file is posted to
     whatever serves `speech.transcribe` with its own media type, so an
     ffmpeg-backed server — Speaches, faster-whisper-server — reads an MP4
     directly. whisper.cpp's own server wants audio, and Chitraq does not
