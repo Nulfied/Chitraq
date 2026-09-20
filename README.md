@@ -31,6 +31,10 @@ Requires **Node 24 or later** — that is the version this is developed and
 tested on. `node:sqlite` exists from 22.5, so older versions may well work;
 nobody has checked, so the engines field says 24.
 
+Runs on **Linux, macOS and Windows**. All three are in CI on every push, so
+that is checked rather than assumed — the one platform-specific bug found so
+far was a Windows-only crash in recursive file watching.
+
 ---
 
 ## What makes it different
@@ -471,6 +475,15 @@ anybody.
 `docs/INVARIANTS.md` lists the sixty rules the code is built to hold, each
 naming where it is enforced and the test that proves it. `docs/ARCHITECTURE.md`
 is the shape of the thing.
+
+---
+
+## Development
+
+AI-assisted development was used throughout implementation for code
+generation, refactoring, debugging assistance, documentation, and test
+development. Architecture, specifications, design decisions, integration,
+validation, and project direction were performed by the project author.
 
 ---
 

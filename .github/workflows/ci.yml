@@ -31,11 +31,16 @@ jobs:
     name: tests · node ${{ matrix.node }} · ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
-      # One platform failing should still report the other, rather than
-      # cancelling it and hiding whether the problem is platform-specific.
+      # All three of the platforms the README claims support for, because a
+      # claim nothing checks is a claim that quietly stops being true. The
+      # one platform-specific crash found so far was a libuv assertion in
+      # recursive fs.watch on Windows short paths.
+      #
+      # One platform failing should still report the others, rather than
+      # cancelling them and hiding whether the problem is platform-specific.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
         node: ['24']
 
     steps:

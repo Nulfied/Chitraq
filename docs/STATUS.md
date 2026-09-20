@@ -303,6 +303,7 @@ says otherwise.
 | CLI | IMPLEMENTED | Works with no server |
 | Web interface | IMPLEMENTED | 11 views, light and dark |
 | **Folder watch** | IMPLEMENTED | `chitraq watch` — foreground, debounced, queued, stops with the terminal |
+| **Linux, macOS, Windows** | IMPLEMENTED | All three run the full suite in CI on every push |
 | Graph visualisation | IMPLEMENTED | |
 
 ## Not built, deliberately
