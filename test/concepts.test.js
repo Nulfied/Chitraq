@@ -229,3 +229,44 @@ test('candidates read only active, non-entity knowledge', async (t) => {
 
   assert.deepEqual(candidates(c.db, { workspaceId: c.workspaceId }), []);
 });
+
+test('links and paths are not ideas', async (t) => {
+  // On a real corpus the strongest "concept" was `https github com nulfied`
+  // and the fourth was `editors tree-sitter-halka`: a URL tokenises into
+  // ordinary-looking words, so a repeated link looks like a repeated idea.
+  const c = new Chitraq({ path: ':memory:' });
+  t.after(() => c.close());
+
+  await fill(c, [
+    ['A', 'See https://github.com/Nulfied/halka and run editors/tree-sitter/build.sh now.'],
+    ['B', 'Again https://github.com/Nulfied/halka plus editors/tree-sitter/build.sh here.'],
+    ['C', 'Once more https://github.com/Nulfied/halka with editors/tree-sitter/build.sh.'],
+    ['D', 'And https://github.com/Nulfied/halka beside editors/tree-sitter/build.sh too.'],
+  ]);
+
+  for (const phrase of c.concepts().map((k) => k.phrase)) {
+    assert.ok(!/github|https|tree-sitter|build/.test(phrase), `"${phrase}" is an address`);
+  }
+});
+
+test('a table row is not a claim', async (t) => {
+  // 22 of 460 objects in a real store were markdown table rows stored as
+  // knowledge. They get embedded, retrieved, and turn adjacent cells into
+  // "concepts" like "start end close true newline".
+  const c = new Chitraq({ path: ':memory:' });
+  t.after(() => c.close());
+
+  const result = await c.ingest({
+    text:
+      'We measured latency carefully across the whole index.\n\n' +
+      '| kernel | Halka | C | Python |\n|---|---|---|---|\n| fib | 153 ms | 141 ms | 9 s |\n\n' +
+      'The result was a clear improvement for every workload.',
+    filename: 'bench.md',
+  });
+
+  for (const p of result.proposals) {
+    const payload = typeof p.payload === 'string' ? JSON.parse(p.payload) : p.payload;
+    assert.ok(!/\|.*\|.*\|/.test(payload.title), `a table row became a claim: ${payload.title}`);
+  }
+  assert.ok(result.proposals.length >= 2, 'the real sentences were still captured');
+});

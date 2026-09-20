@@ -326,6 +326,21 @@ const ENTITY_PATTERNS = [
 ];
 
 /**
+ * Is this a row from a table rather than a sentence?
+ *
+ * Three or more cell separators, or the dashes that underline a header. Both
+ * survive sentence splitting intact and look like prose to everything
+ * downstream.
+ *
+ * @param {string} sentence
+ */
+function isTableRow(sentence) {
+  const pipes = (sentence.match(/\|/g) ?? []).length;
+  if (pipes >= 3) return true;
+  return /\|\s*-{3,}/.test(sentence);
+}
+
+/**
  * Pattern-based entity candidates.
  *
  * Structured entities (dates, money, ids) are found reliably. Proper names are
@@ -587,6 +602,10 @@ export function claims(text, limit = 12) {
     const terms = contentTerms(sentence);
     // Too short to stand alone, or too long to be one claim.
     if (terms.length < 4 || estimateTokens(sentence) > 120) continue;
+    // A table row is columns of values, not an assertion. Stored as a claim
+    // it reads as knowledge, gets embedded, and turns adjacent cells into
+    // recurring "concepts" like "start end close true newline".
+    if (isTableRow(sentence)) continue;
     // Questions are captured as questions, not asserted as claims.
     const isQuestion = /\?\s*$/.test(sentence);
 

@@ -5,7 +5,7 @@ What is actually built, what is partial, and what is deliberately not built.
 States: **IMPLEMENTED** (built and tested), **PARTIAL** (works, with a stated
 limit), **NOT BUILT** (deliberately deferred).
 
-Last updated: 2026-09-20. 342 tests passing.
+Last updated: 2026-09-20. 344 tests passing.
 
 ---
 
@@ -363,7 +363,15 @@ says otherwise.
    3 are common nouns the product pattern caught (`Rules`, `Gate`,
    `Provenance`). Better, still not good. Prose about people works far better
    than documentation does; a model would do this properly.
-9. **Concepts are the weakest entity kind.** They are found by recurrence
+9. **Concepts are the weakest entity kind.** Measured on a real corpus, the
+   first run's strongest "concept" was `https github com nulfied` — a URL
+   tokenises into ordinary words, so a repeated link looks like a repeated
+   idea. Links, paths, code spans and table rows are now stripped before the
+   scan, and identifiers and bare verbs disqualify a phrase, which turned up
+   `memory safety`, `runtime dependencies`, `reference interpreter` and
+   `lifetime annotations` underneath. Roughly half of what it returns is
+   still fragments of tabular prose. It finds phrases you repeat, which is
+   not the same as ideas you hold. They are found by recurrence
    across separate notes, which is honest but shallow: it finds phrases you
    repeat, not ideas you hold. Everything it produces is a proposal, and
    confidence is capped well below the shape-based kinds.

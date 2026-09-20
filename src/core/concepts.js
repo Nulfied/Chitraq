@@ -46,6 +46,16 @@ const EDGE_NOISE = new Set([
   'very', 'really', 'quite', 'just', 'also', 'still', 'now', 'then', 'here', 'there',
   'one', 'two', 'three', 'first', 'last', 'next', 'new', 'old', 'more', 'most',
   'good', 'bad', 'big', 'small', 'own', 'same', 'other', 'another', 'much', 'many',
+  // Modals and vague nouns. Each ended a fabricated concept on a real
+  // corpus: "proposal cannot", "packages user", "name halka".
+  'cannot', 'cant', 'wont', 'shall', 'ought', 'need', 'needs', 'want', 'wants',
+  'name', 'names', 'user', 'users', 'thing', 'things', 'way', 'ways', 'part',
+  'case', 'cases', 'kind', 'kinds', 'type', 'types', 'item', 'items',
+  // Bare verbs. A concept is a thing, not an action: "goes through",
+  // "git clone", "returns true" are all things people do, not think in.
+  'goes', 'go', 'run', 'runs', 'clone', 'add', 'adds', 'set', 'sets', 'put',
+  'puts', 'take', 'takes', 'give', 'gives', 'keep', 'keeps', 'call', 'calls',
+  'see', 'sees', 'says', 'say', 'let', 'lets', 'true', 'false', 'null', 'none',
 ]);
 
 /**
@@ -90,8 +100,7 @@ export function candidates(db, opts) {
   const phrases = new Map();
 
   for (const row of rows) {
-    const text = `${row.title ?? ''}. ${row.body ?? ''}`;
-    const words = tokenize(text);
+    const words = tokenize(prose(`${row.title ?? ''}. ${row.body ?? ''}`));
 
     for (const size of SIZES) {
       for (let i = 0; i + size <= words.length; i++) {
@@ -146,11 +155,41 @@ export function candidates(db, opts) {
 }
 
 /**
+ * Strip the parts of a document that are addresses rather than language.
+ *
+ * A URL tokenises into a sequence of ordinary-looking words, and a repeated
+ * link then looks exactly like a repeated idea: on a real corpus the
+ * strongest "concept" found was `https github com nulfied`, and the fourth
+ * was `editors tree-sitter-halka`. Neither is anything somebody thinks in.
+ *
+ * Removed rather than tokenised differently, because a concept is a phrase a
+ * person would say out loud, and none of this is.
+ *
+ * @param {string} text
+ */
+function prose(text) {
+  return String(text ?? '')
+    // Table rows are columns of values, not sentences. Read as prose they
+    // produce phrases like "start end close true newline" — adjacent cells
+    // from a token table, appearing together in every document that has one.
+    .replace(/^\s*\|.*\|\s*$/gm, ' ')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`[^`]*`/g, ' ')
+    .replace(/\bhttps?:\/\/\S+/gi, ' ')
+    .replace(/\b[\w.-]+@[\w.-]+\.\w+/g, ' ')
+    .replace(/\b[\w.-]*\/[\w./-]+/g, ' ')
+    .replace(/\b[\w-]+\.(js|ts|md|json|sh|py|c|h|html|yml|yaml|toml)\b/gi, ' ')
+    .replace(/\s+/g, ' ');
+}
+
+/**
  * Is this window of words a phrase somebody would name?
  * @param {string[]} words
  */
 function isPhrase(words) {
   if (words.some((w) => w.length < 3 || /^\d+$/.test(w))) return false;
+  // An identifier is not a phrase: `tree-sitter-halka`, `build.sh`, `v49`.
+  if (words.some((w) => /[-._/]|\d/.test(w))) return false;
   // Grammar at either end makes a fragment, not a concept.
   if (EDGE_NOISE.has(words[0]) || EDGE_NOISE.has(words[words.length - 1])) return false;
   // A phrase that is entirely filler in the middle is filler overall.
