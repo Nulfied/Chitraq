@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 
 import { Chitraq } from '../src/chitraq.js';
 import { money, DOLLAR } from '../src/intelligence/budget.js';
+import * as gateway from '../src/intelligence/gateway.js';
 
 /** A paid provider that always answers, for budget arithmetic. */
 function paidProvider(id, costMicros) {
@@ -245,13 +246,22 @@ test('proposals can be accepted in bulk above a confidence threshold', async () 
     filename: 'notes.md',
   });
 
-  const pendingBefore = c.pending().length;
-  assert.ok(pendingBefore >= 3);
+  const before = c.pending();
+  assert.ok(before.length >= 3);
 
   const result = await c.reviewAll({ action: 'accept', minConfidence: 0.6 });
   assert.ok(result.succeeded.length > 0);
   assert.equal(result.failed.length, 0);
-  assert.ok(c.pending().length < pendingBefore, 'the queue shrinks');
+
+  // Not a count: accepting now enriches, and enrichment proposes keywords and
+  // entities of its own, so the queue can legitimately be longer afterwards.
+  // What must be true is that the ones taken are gone.
+  const stillPending = new Set(c.pending().map((p) => p.id));
+  const accepted = before.filter((p) => (p.confidence ?? 0) >= 0.6);
+  assert.ok(accepted.length > 0, 'something met the threshold');
+  for (const p of accepted) {
+    assert.ok(!stillPending.has(p.id), `${p.id} was accepted and should be gone`);
+  }
   c.close();
 });
 
@@ -306,4 +316,62 @@ test('stale proposals expire without being marked rejected', async () => {
   assert.equal(c.pending({ status: 'rejected' }).length, 0, 'expiring is not rejecting');
   assert.ok(c.pending({ status: 'expired' }).length > 0, 'and the distinction is kept');
   c.close();
+});
+
+test('accepting a proposal connects the object, not just indexes it', async (t) => {
+  // Found by loading 460 real objects through a folder import and getting zero
+  // entities out. `accept` indexed but never enriched, so everything arriving
+  // by that route was searchable and joined to nothing — no entities, no
+  // proposed relations, no contradictions noticed.
+  const c = new Chitraq({ path: ':memory:' });
+  t.after(() => c.close());
+
+  const { proposal } = gateway.propose(
+    c.db,
+    {
+      workspaceId: c.workspaceId,
+      op: gateway.Op.CreateObject,
+      confidence: 0.9,
+      payload: {
+        title: 'Priya Sharma approved the Atlas migration in Pune',
+        kind: 'note',
+        origin: 'source',
+      },
+    },
+    { autoAccept: {} },
+    c.actor
+  );
+
+  await c.accept(proposal.id);
+
+  const entities = c.entities().map((e) => e.title).sort();
+  assert.ok(entities.includes('Priya Sharma'), `person resolved, got ${entities.join(', ')}`);
+  assert.ok(entities.includes('Atlas'), 'project resolved');
+});
+
+test('bulk accept can skip enrichment, because it is the slow half', async (t) => {
+  const c = new Chitraq({ path: ':memory:' });
+  t.after(() => c.close());
+
+  for (const title of ['Priya Sharma in Pune', 'Ravi Kumar in Chennai']) {
+    gateway.propose(
+      c.db,
+      {
+        workspaceId: c.workspaceId,
+        op: gateway.Op.CreateObject,
+        confidence: 0.9,
+        payload: { title, kind: 'note', origin: 'source' },
+      },
+      { autoAccept: {} },
+      c.actor
+    );
+  }
+
+  await c.reviewAll({ action: 'accept', enrich: false });
+  assert.equal(c.entities().length, 0, 'opted out');
+
+  // And the objects are still there and findable — skipping enrichment must
+  // not skip the accept itself.
+  const objects = c.db.prepare("SELECT COUNT(*) n FROM object WHERE kind != 'entity'").get();
+  assert.equal(Number(objects.n), 2);
 });

@@ -1520,15 +1520,43 @@ export class Chitraq {
   }
 
   /**
+   * Accept a proposal into memory.
+   *
+   * Indexing makes the object findable; enriching makes it *connected* — the
+   * names in it resolved to entities, its relationships proposed, its
+   * contradictions with what you already know noticed. Only `remember()` used
+   * to do the second one, which meant everything arriving through a folder
+   * import was searchable and joined to nothing. On 460 real objects that
+   * produced exactly zero entities and zero conflicts.
+   *
    * @param {string} proposalId
    * @param {string} [note]
+   * @param {{enrich?: boolean}} [opts]
    */
-  async accept(proposalId, note) {
+  async accept(proposalId, note, opts = {}) {
     const result = gateway.accept(this.db, proposalId, this.actor, note);
     if (result.applied.kind === 'object') {
       await this.#index(objects.get(this.db, result.applied.id));
+      if (opts.enrich !== false) await this.#enrichQuietly(result.applied.id);
     }
     return result;
+  }
+
+  /**
+   * Enrich without letting a failure undo an accept.
+   *
+   * The object is already in memory by the time this runs. Enrichment is the
+   * optional half — if a model is down or slow, the knowledge is still
+   * captured and findable, which is the same rule capture follows.
+   *
+   * @param {string} objectId
+   */
+  async #enrichQuietly(objectId) {
+    try {
+      return await this.enrich(objectId);
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -1732,12 +1760,20 @@ export class Chitraq {
 
   /**
    * Accept or decline many proposals at once, by id or by filter.
-   * @param {{action: 'accept'|'reject', ids?: string[], minConfidence?: number, op?: string, runId?: string, limit?: number, note?: string}} input
+   * @param {{action: 'accept'|'reject', ids?: string[], minConfidence?: number, op?: string, runId?: string, limit?: number, note?: string, enrich?: boolean}} input
    */
   async reviewAll(input) {
     const result = gateway.bulk(this.db, { workspaceId: this.workspaceId, ...input }, this.actor);
+
+    // Enrichment runs per object and calls a model twice, so a bulk accept of
+    // several hundred is a long job. It still defaults to on: an accept that
+    // silently skips connecting the knowledge is how a folder import ends up
+    // with no entities at all. `enrich: false` is there for when the caller
+    // knows it is importing in bulk and will reindex afterwards.
     for (const applied of result.succeeded) {
-      if (applied?.kind === 'object') await this.#index(objects.get(this.db, applied.id));
+      if (applied?.kind !== 'object') continue;
+      await this.#index(objects.get(this.db, applied.id));
+      if (input.enrich !== false) await this.#enrichQuietly(applied.id);
     }
     return result;
   }
