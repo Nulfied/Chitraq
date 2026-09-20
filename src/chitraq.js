@@ -1410,7 +1410,18 @@ export class Chitraq {
             },
           },
         },
-        this.acceptPolicy,
+        // Auto-accepted, unlike everything else this gateway sees.
+        //
+        // These attributes are keywords and entity names a deterministic
+        // extractor read out of the object's own text. They assert nothing
+        // new, change no claim, and can be recomputed at any time. Queuing
+        // them put 920 items in front of a person on a corpus of 460 —
+        // burying the proposals that genuinely need a decision, which is the
+        // one thing a review queue must not do.
+        //
+        // Scoped to this call rather than loosened globally: a SetAttributes
+        // proposal from anywhere else still waits.
+        DERIVED_ATTRS_POLICY,
         this.actor
       );
       proposals.push(proposal);
@@ -1557,7 +1568,13 @@ export class Chitraq {
     const result = gateway.accept(this.db, proposalId, this.actor, note);
     if (result.applied.kind === 'object') {
       await this.#index(objects.get(this.db, result.applied.id));
-      if (opts.enrich !== false) await this.#enrichQuietly(result.applied.id);
+      // Only what was just *created*. Enriching on every accept meant
+      // accepting an attribute proposal re-enriched its object, which
+      // proposed attributes and relations again — a queue of 920 grew to
+      // 2277 by draining it. An object is enriched once, when it arrives.
+      if (opts.enrich !== false && result.proposal?.op === gateway.Op.CreateObject) {
+        await this.#enrichQuietly(result.applied.id);
+      }
     }
     return result;
   }
@@ -1793,7 +1810,10 @@ export class Chitraq {
     for (const applied of result.succeeded) {
       if (applied?.kind !== 'object') continue;
       await this.#index(objects.get(this.db, applied.id));
-      if (input.enrich !== false) await this.#enrichQuietly(applied.id);
+      // As in `accept`: enrichment belongs to creation, not to every touch.
+      if (input.enrich !== false && applied.op === gateway.Op.CreateObject) {
+        await this.#enrichQuietly(applied.id);
+      }
     }
     return result;
   }
@@ -2581,6 +2601,14 @@ function round4(n) {
 }
 
 /** @param {string} text */
+
+/**
+ * Accept policy for the attributes enrichment derives from an object's own
+ * text. Everything else the gateway handles still waits for a person.
+ */
+const DERIVED_ATTRS_POLICY = Object.freeze({
+  autoAccept: Object.freeze({ [gateway.Op.SetAttributes]: 0.5 }),
+});
 
 /**
  * How many claims to ask for, given how much there is to read.

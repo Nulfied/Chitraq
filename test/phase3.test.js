@@ -427,3 +427,50 @@ test('a genuine spread is not called degenerate', async (t) => {
   const taken = stats.wouldAcceptAbove(0.7);
   assert.ok(taken > 0 && taken < stats.total, 'a threshold sorts them');
 });
+
+test('draining the review queue empties it, rather than refilling it', async (t) => {
+  // Enrichment used to run on every accept, so accepting an attribute
+  // proposal re-enriched its object and proposed attributes and relations
+  // again. On a real corpus, draining a queue of 920 grew it to 2277.
+  // Enrichment belongs to creation, not to every touch.
+  const c = new Chitraq({ path: ':memory:' });
+  t.after(() => c.close());
+
+  await c.ingest({
+    text:
+      'We chose SQLite because it needs no server. Priya Sharma approved it in Pune. ' +
+      'The team measured p99 latency at 38ms across 14000 chunks.',
+    filename: 'notes.md',
+  });
+
+  let rounds = 0;
+  let previous = Infinity;
+  while (c.pending().length) {
+    const before = c.pending().length;
+    assert.ok(before < previous, `the queue must shrink: ${previous} -> ${before}`);
+    previous = before;
+    await c.reviewAll({ action: 'accept' });
+    if (++rounds > 5) throw new Error('the review queue is not converging');
+  }
+
+  assert.equal(c.pending().length, 0);
+});
+
+test('derived attributes apply without waiting for a person', async (t) => {
+  const c = new Chitraq({ path: ':memory:' });
+  t.after(() => c.close());
+
+  const { object } = await c.remember({
+    title: 'Priya Sharma approved the Atlas migration in Pune',
+  });
+
+  // Keywords and entity names read out of the object's own text assert
+  // nothing new and can be recomputed, so queuing them only buries the
+  // proposals that need a decision.
+  assert.ok(c.recall(object.id).object.attrs?.keywords?.length, 'attributes landed');
+  assert.equal(
+    c.pending().filter((p) => p.op === 'set_attributes').length,
+    0,
+    'and none of them are waiting'
+  );
+});

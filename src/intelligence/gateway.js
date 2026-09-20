@@ -730,7 +730,12 @@ export function bulk(db, input, actor) {
         input.action === 'accept'
           ? accept(db, row.id, actor, input.note)
           : reject(db, row.id, actor, input.note);
-      succeeded.push(input.action === 'accept' ? result.applied : { id: row.id });
+      // The op travels with the result: a caller deciding what to do next —
+      // enrich a new object, say — cannot tell a creation from an update
+      // without it.
+      succeeded.push(
+        input.action === 'accept' ? { ...result.applied, op: row.op } : { id: row.id, op: row.op }
+      );
     } catch (err) {
       // A proposal that went stale between listing and applying is expected,
       // not exceptional. Record it and carry on.

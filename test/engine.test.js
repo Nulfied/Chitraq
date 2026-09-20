@@ -176,8 +176,15 @@ test('remember -> search -> recall works with no AI configured', async () => {
 
   const recalled = c.recall(object.id);
   assert.equal(recalled.object.title, 'Chose SQLite for the memory store');
-  assert.equal(recalled.history.length, 1);
-  assert.equal(recalled.provenance[0].method, 'user');
+
+  // Two versions, not one: the capture, then the keywords and entities that
+  // enrichment derived from its own text. Writing those is a mutation, so it
+  // appends a version like any other — the alternative was leaving them
+  // queued, which put 920 review items in front of a person on a corpus of
+  // 460 and buried the proposals that actually needed a decision.
+  assert.equal(recalled.history.length, 2);
+  assert.equal(recalled.provenance[0].method, 'user', 'the capture is still yours');
+  assert.ok(recalled.object.attrs?.keywords?.length, 'and the derived attributes landed');
   c.close();
 });
 
