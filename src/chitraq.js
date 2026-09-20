@@ -2080,6 +2080,49 @@ export class Chitraq {
     return Boolean(declined);
   }
 
+  /**
+   * What the waiting proposals look like, and whether their confidence means
+   * anything.
+   *
+   * A threshold is only a filter if the numbers behind it vary. A small local
+   * model frequently emits one default for everything: on a real import of 27
+   * documents, 402 of 460 proposals came back at exactly 0.4, so the advice
+   * to "accept above 0.7" would have taken four of them and left someone
+   * concluding the tool found nothing worth keeping.
+   *
+   * This reports the distribution so an interface can say that plainly
+   * instead of offering a control that does nothing.
+   */
+  pendingStats() {
+    const rows = this.db
+      .prepare(
+        `SELECT confidence, COUNT(*) AS n FROM proposal
+         WHERE workspace_id = ? AND status = 'pending'
+         GROUP BY confidence ORDER BY n DESC`
+      )
+      .all(this.workspaceId)
+      .map((r) => ({ confidence: Number(r.confidence ?? 0), count: Number(r.n) }));
+
+    const total = rows.reduce((sum, r) => sum + r.count, 0);
+    const commonest = rows[0] ?? null;
+
+    // "Most of them agree" is the signal. Two thirds sharing one value means
+    // the model is emitting a default rather than judging.
+    const share = total ? (commonest?.count ?? 0) / total : 0;
+    const degenerate = total >= 10 && share >= 0.66;
+
+    return {
+      total,
+      distinct: rows.length,
+      distribution: rows,
+      commonest: commonest?.confidence ?? null,
+      commonestShare: Math.round(share * 100) / 100,
+      degenerate,
+      // What a threshold would actually take, so the suggestion can be true.
+      wouldAcceptAbove: (t) => rows.filter((r) => r.confidence >= t).reduce((a, r) => a + r.count, 0),
+    };
+  }
+
   /** Peers this workspace has exchanged changes with. */
   peers() {
     return sync.peers(this.db, this.workspaceId);

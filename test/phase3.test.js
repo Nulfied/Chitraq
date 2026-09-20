@@ -375,3 +375,55 @@ test('bulk accept can skip enrichment, because it is the slow half', async (t) =
   const objects = c.db.prepare("SELECT COUNT(*) n FROM object WHERE kind != 'entity'").get();
   assert.equal(Number(objects.n), 2);
 });
+
+test('a flat confidence signal is reported, not dressed up as a filter', async (t) => {
+  // A real import of 27 documents produced 460 proposals, 402 of them at
+  // exactly 0.4 — llama3.2 emitting a default rather than judging. The docs
+  // recommended `--accept-above 0.7`, which would have taken four of them.
+  const c = new Chitraq({ path: ':memory:' });
+  t.after(() => c.close());
+
+  for (let i = 0; i < 40; i++) {
+    gateway.propose(
+      c.db,
+      {
+        workspaceId: c.workspaceId,
+        op: gateway.Op.CreateObject,
+        confidence: 0.4,
+        payload: { title: `claim ${i}`, kind: 'note', origin: 'source' },
+      },
+      { autoAccept: {} },
+      c.actor
+    );
+  }
+
+  const stats = c.pendingStats();
+  assert.equal(stats.degenerate, true, 'one value for everything is not a signal');
+  assert.equal(stats.commonest, 0.4);
+  assert.equal(stats.wouldAcceptAbove(0.7), 0, 'the advertised threshold takes nothing');
+});
+
+test('a genuine spread is not called degenerate', async (t) => {
+  const c = new Chitraq({ path: ':memory:' });
+  t.after(() => c.close());
+
+  for (let i = 0; i < 40; i++) {
+    gateway.propose(
+      c.db,
+      {
+        workspaceId: c.workspaceId,
+        op: gateway.Op.CreateObject,
+        confidence: Math.round((0.3 + (i % 8) * 0.09) * 100) / 100,
+        payload: { title: `claim ${i}`, kind: 'note', origin: 'source' },
+      },
+      { autoAccept: {} },
+      c.actor
+    );
+  }
+
+  const stats = c.pendingStats();
+  assert.equal(stats.degenerate, false);
+  assert.ok(stats.distinct >= 5);
+  const taken = stats.wouldAcceptAbove(0.7);
+  assert.ok(taken > 0 && taken < stats.total, 'a threshold sorts them');
+});

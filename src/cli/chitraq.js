@@ -727,9 +727,7 @@ async function run(command, rest, flags, c) {
         console.log('');
       }
       console.log(`  Accept with: chitraq accept <id>   ·   Decline with: chitraq reject <id>`);
-      console.log(
-        `  Or in bulk:  chitraq review --accept-all   ·   chitraq review --accept-above 0.7\n`
-      );
+      console.log(`  Or in bulk:  ${bulkAdvice(c.pendingStats())}\n`);
       break;
     }
 
@@ -1021,7 +1019,7 @@ async function ingestFolder(target, flags, c) {
     console.log(`  The text is stored, but none of it is searchable yet: ${waiting} proposal(s)`);
     console.log(`  are waiting for you. Nothing enters memory until you say so.`);
     console.log(`\n    chitraq review                       look at them`);
-    console.log(`    chitraq review --accept-above 0.7    take the confident ones`);
+    console.log(`    ${bulkAdvice(c.pendingStats())}`);
   } else if (!opts.extract && result.captured.length) {
     console.log(`  The text is stored verbatim, but --no-extract means nothing was read`);
     console.log(`  out of it, so there is nothing to search yet. Run this again without`);
@@ -1039,6 +1037,37 @@ function describeCounts(counts) {
     .filter(([, n]) => n > 0)
     .map(([k, n]) => `${n} ${k}`);
   return parts.length ? parts.join(', ') : 'nothing';
+}
+
+/**
+ * Suggest a bulk review command that will actually do something.
+ *
+ * Recommending a fixed threshold is only honest when confidence varies. When
+ * a model emits one default for nearly everything — which a small local one
+ * routinely does — the threshold silently takes almost nothing, and the
+ * person concludes the extraction found nothing worth keeping.
+ *
+ * @param {any} stats from chitraq.pendingStats()
+ */
+function bulkAdvice(stats) {
+  if (!stats?.total) return 'chitraq review --accept-all';
+
+  if (stats.degenerate) {
+    return (
+      `chitraq review --accept-all\n` +
+      `  ${dim(`${Math.round(stats.commonestShare * 100)}% of these carry the same confidence ` +
+        `(${stats.commonest}), so a threshold would not sort them. Judge them by source instead.`)}`
+    );
+  }
+
+  // Offer a threshold only where it leaves a useful amount on each side.
+  for (const t of [0.7, 0.6, 0.5]) {
+    const n = stats.wouldAcceptAbove(t);
+    if (n >= 3 && n < stats.total) {
+      return `chitraq review --accept-above ${t}   ${dim(`takes ${n} of ${stats.total}`)}`;
+    }
+  }
+  return `chitraq review --accept-all   ${dim(`all ${stats.total}`)}`;
 }
 
 /** What each scope actually permits, in the words the help uses. */
