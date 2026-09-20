@@ -169,6 +169,13 @@ async function run(command, rest, flags, c) {
       console.log(`  proposed    ${result.proposals.length} pieces of knowledge`);
       // Which extractor did it, when it was not the best one available. A
       // timed-out model otherwise looks exactly like a model that ran.
+      if (result.pieces > 1) console.log(`  read in     ${result.pieces} pieces`);
+      if (result.skippedModel) {
+        console.log(
+          `  used the floor: a model would take about ` +
+            `${Math.round(result.skippedModel.estimatedMs / 60000)} min for this`
+        );
+      }
       if (result.fellBackFrom?.length) {
         for (const f of result.fellBackFrom) {
           console.log(`  ⚠ ${f.provider} ${f.reason} after ${Math.round(f.ms / 1000)}s`);

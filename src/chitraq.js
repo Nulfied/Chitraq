@@ -54,7 +54,7 @@ import * as answerCache from './context/answer-cache.js';
 import { parseSource } from './capture/parse.js';
 import { planFolder } from './capture/folder.js';
 import { watchFolder, displayPath, resolveReal } from './capture/watch.js';
-import { estimateTokens } from './core/text.js';
+import { estimateTokens, chunk as chunkText, normalise } from './core/text.js';
 
 export { Capability } from './intelligence/registry.js';
 export { Kind, Origin, Epistemic, State } from './core/objects.js';
@@ -628,11 +628,7 @@ export class Chitraq {
     // Extraction is a capability call. With no model configured this is the
     // deterministic segmenter; with one configured it is that model. Either
     // way the output is proposals, never direct writes.
-    const run = await this.router.tryRun(
-      Capability.ExtractClaims,
-      { text: parsed.text, title: parsed.title, limit: claimBudget(parsed.text) },
-      { workspaceId: this.workspaceId }
-    );
+    const run = await this.#extractClaims(parsed.text, parsed.title);
 
     /** @type {any[]} */
     const proposals = [];
@@ -692,7 +688,149 @@ export class Chitraq {
       extractedBy: run?.provider ?? null,
       degraded: run?.degraded ?? false,
       fellBackFrom: run?.fellBackFrom ?? null,
+      // How the document was read: in one call, or in this many pieces.
+      pieces: run?.pieces ?? 1,
+      skippedModel: run?.skippedModel ?? null,
     };
+  }
+
+  /**
+   * Pull claims out of a document, a piece at a time when it is long.
+   *
+   * Handing a whole document to a small local model does not work. Measured
+   * on a 41,000-character specification, llama3.2 took eighty seconds and
+   * returned *one* claim, while the deterministic segmenter found
+   * forty-six — so the model was not merely slow, it was worse. The
+   * bottleneck is how much it can hold at once, not how much there is to do.
+   *
+   * Split into pieces it can actually read and it works: each call is small,
+   * fast and about a passage it can keep in view. The pieces come from the
+   * same chunker retrieval uses, so a claim's neighbourhood matches what a
+   * search would return.
+   *
+   * Short documents still go in one call — chunking a paragraph only adds
+   * round trips.
+   *
+   * @param {string} text
+   * @param {string|null} title
+   */
+  async #extractClaims(text, title) {
+    const budget = claimBudget(text);
+    const oneShot = () =>
+      this.router.tryRun(
+        Capability.ExtractClaims,
+        { text, title, limit: budget },
+        { workspaceId: this.workspaceId }
+      );
+
+    if (text.length < CHUNKED_EXTRACTION_ABOVE) return oneShot();
+
+    const pieces = chunkText(text, { maxTokens: 400 });
+    if (pieces.length < 2) return oneShot();
+
+    // Ask what this would actually cost before starting it.
+    //
+    // Chunking fixes the model's context problem and does nothing for its
+    // speed. Measured here, llama3.2 takes 86 seconds for a 1,000-character
+    // piece — about five tokens a second — so a 41-piece document is an hour.
+    // Without this check the router discovers that one timeout at a time.
+    //
+    // The floor is instant and, on a document this size, was measurably
+    // better anyway. Choosing it deliberately beats forty timeouts.
+    const estimate = this.#estimatedExtractionMs(pieces.length);
+    if (estimate !== null && estimate > MAX_EXTRACTION_MS) {
+      const run = await this.router.tryRun(
+        Capability.ExtractClaims,
+        { text, title, limit: budget },
+        { workspaceId: this.workspaceId, policy: { denyProviders: nonDeterministic(this.registry) } }
+      );
+      return run
+        ? {
+            ...run,
+            pieces: pieces.length,
+            skippedModel: {
+              reason: 'too slow for a document this size',
+              estimatedMs: estimate,
+              pieces: pieces.length,
+            },
+          }
+        : run;
+    }
+
+    /** @type {any[]} */
+    const claims = [];
+    /** @type {any} */
+    let lastRun = null;
+    /** @type {any[]} */
+    const fellBackFrom = [];
+    const seen = new Set();
+    // Spread the budget across the document rather than letting the first
+    // pieces spend all of it.
+    const perPiece = Math.max(3, Math.ceil(budget / pieces.length));
+
+    for (const piece of pieces) {
+      if (claims.length >= budget) break;
+      const run = await this.router.tryRun(
+        Capability.ExtractClaims,
+        { text: piece.text, title, limit: perPiece },
+        { workspaceId: this.workspaceId }
+      );
+      if (!run) continue;
+      lastRun = run;
+      for (const f of run.fellBackFrom ?? []) fellBackFrom.push(f);
+
+      for (const claim of run.result?.claims ?? []) {
+        // Overlapping chunks repeat sentences by design, so the same claim
+        // arrives more than once. Keyed on the text rather than the offset,
+        // which differs between pieces.
+        const key = normaliseClaim(claim.text);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        claims.push({ ...claim, offset: (piece.offset ?? 0) + (claim.offset ?? 0) });
+      }
+    }
+
+    if (!lastRun) return null;
+
+    return {
+      ...lastRun,
+      result: { ...lastRun.result, claims: claims.slice(0, budget) },
+      // One number people ask about immediately: how much of this was read.
+      pieces: pieces.length,
+      fellBackFrom: fellBackFrom.length ? fellBackFrom : null,
+      degraded: fellBackFrom.length > 0,
+    };
+  }
+
+  /**
+   * How long reading a document in pieces would take, from this machine's own
+   * history rather than from what an adapter declares.
+   *
+   * Returns null until there is enough history to judge by, in which case the
+   * attempt is made and the measurement recorded for next time.
+   *
+   * @param {number} pieces
+   * @returns {number|null}
+   */
+  #estimatedExtractionMs(pieces) {
+    const candidates = this.registry
+      .supporting(Capability.ExtractClaims)
+      .filter((p) => !p.deterministic);
+    if (!candidates.length) return null;
+
+    /** @type {number[]} */
+    const measured = [];
+    for (const provider of candidates) {
+      const ms = measuredLatency(this.db, {
+        workspaceId: this.workspaceId,
+        capability: Capability.ExtractClaims,
+        provider: provider.id,
+        minRuns: 2,
+      });
+      if (ms !== null) measured.push(ms);
+    }
+    if (!measured.length) return null;
+    return Math.min(...measured) * pieces;
   }
 
   /**
@@ -2601,6 +2739,42 @@ function round4(n) {
 }
 
 /** @param {string} text */
+
+/**
+ * Above this, a document is read in pieces rather than whole.
+ *
+ * Roughly where a small local model stops coping. Below it, chunking only
+ * adds round trips for no gain.
+ */
+const CHUNKED_EXTRACTION_ABOVE = 6_000;
+
+/**
+ * Longest a single document's extraction may be expected to take before the
+ * deterministic floor is chosen instead. Five minutes is already generous for
+ * something that happens at capture.
+ */
+const MAX_EXTRACTION_MS = 5 * 60_000;
+
+/**
+ * Provider ids that are not the deterministic floor.
+ * @param {import('./intelligence/registry.js').Registry} registry
+ */
+function nonDeterministic(registry) {
+  return [...registry.providers.values()].filter((p) => !p.deterministic).map((p) => p.id);
+}
+
+/**
+ * A claim reduced to what makes it the same claim, for spotting the repeats
+ * that overlapping chunks produce on purpose.
+ *
+ * @param {string} text
+ */
+function normaliseClaim(text) {
+  return normalise(String(text ?? ''))
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
 /**
  * Accept policy for the attributes enrichment derives from an object's own

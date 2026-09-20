@@ -5,7 +5,7 @@ What is actually built, what is partial, and what is deliberately not built.
 States: **IMPLEMENTED** (built and tested), **PARTIAL** (works, with a stated
 limit), **NOT BUILT** (deliberately deferred).
 
-Last updated: 2026-09-20. 337 tests passing.
+Last updated: 2026-09-20. 342 tests passing.
 
 ---
 
@@ -322,7 +322,16 @@ says otherwise.
 1. **The built-in embedder is lexical, not semantic.** It will not connect "car"
    to "automobile". It scores itself 0.35 so any real model outranks it.
    Installing Ollama is the single biggest retrieval improvement available.
-2. **A local 3B model is worse than the segmenter on long documents.**
+2. **A local 3B model is too slow for bulk extraction on modest hardware.**
+   Measured here, llama3.2 needs about **86 seconds for a 1,000-character
+   passage** — roughly five tokens a second, warm, with the model resident.
+   Documents are now read in pieces, which fixes the context limit and does
+   nothing for throughput: a 31-piece document would be three quarters of an
+   hour. So Chitraq estimates the cost from this machine's own run history
+   and chooses the deterministic floor deliberately, saying so, rather than
+   discovering it one timeout at a time. On a machine with a GPU the same
+   code uses the model, because the measurement says it can.
+3. **Extraction by the floor is segmentation, not comprehension.**
    Measured on a 41,000-character specification: llama3.2 took 80 seconds and
    returned *one* claim; the deterministic segmenter finds 46 to 69. On a real
    import of 27 documents the model timed out on four and served one, and the
@@ -330,15 +339,12 @@ says otherwise.
    model would have. Falling back is now reported rather than silent. Chunked
    extraction, so the model sees pieces it can handle, is the fix and is not
    built: it would be roughly ten minutes per large document on this hardware.
-3. **Confidence from a small local model is not a review filter.** On a real
+4. **Confidence from a small local model is not a review filter.** On a real
    import, 402 of 460 proposals came back at exactly 0.4 — llama3.2 emitting
    a default rather than judging. A threshold over that sorts nothing, so
    Chitraq now measures the distribution and says so instead of offering a
    control that does nothing. Review by source is the workable path until a
    model that discriminates is available.
-4. **Deterministic claim extraction is segmentation, not comprehension.** It
-   produces more noise than a language model would — which is why everything it
-   produces is a proposal.
 5. **Contradiction detection is narrow.** Conflicting figures about the same
    subject, and negated restatements. It misses most real contradictions, and is
    tuned for precision because a false "these disagree" is expensive to read.

@@ -378,10 +378,92 @@ test('the claim budget scales with the document', async (t) => {
   const c = new Chitraq({ path: ':memory:' });
   t.after(() => c.close());
 
-  const sentence = 'The team measured p99 latency at 38 milliseconds across the index. ';
-  const short = await c.ingest({ text: sentence.repeat(3), filename: 'short.md' });
-  const long = await c.ingest({ text: sentence.repeat(400), filename: 'long.md' });
+  // Distinct sentences, because identical ones are correctly collapsed by the
+  // duplicate check that overlapping chunks require.
+  const line = (i) => `Measurement ${i}: the p99 latency was ${i} milliseconds across shard ${i}.
+
+`;
+  const many = (n) => Array.from({ length: n }, (_, i) => line(i)).join('');
+
+  const short = await c.ingest({ text: many(3), filename: 'short.md' });
+  const long = await c.ingest({ text: many(400), filename: 'long.md' });
 
   assert.ok(long.proposals.length > short.proposals.length, 'a longer document yields more');
   assert.ok(long.proposals.length > 20, `flat 20 would have capped this, got ${long.proposals.length}`);
+});
+
+test('a long document is read in pieces, not swallowed whole', async (t) => {
+  const c = new Chitraq({ path: ':memory:' });
+  t.after(() => c.close());
+
+  const line = (i) => `Measurement ${i}: the p99 latency was ${i} milliseconds on shard ${i}.\n\n`;
+  const text = Array.from({ length: 400 }, (_, i) => line(i)).join('');
+
+  const result = await c.ingest({ text, filename: 'long.md' });
+  assert.ok(result.pieces > 10, `read in pieces, got ${result.pieces}`);
+  assert.ok(result.proposals.length > 20, 'and produced more than the old flat cap');
+
+  const short = await c.ingest({ text: 'One short note about latency.', filename: 'short.md' });
+  assert.equal(short.pieces, 1, 'a short note is one call, not a round trip per sentence');
+});
+
+test('overlapping pieces do not produce the same claim twice', async (t) => {
+  const c = new Chitraq({ path: ':memory:' });
+  t.after(() => c.close());
+
+  // Chunks overlap by a sentence on purpose, so the same sentence arrives in
+  // two pieces and must be recognised as one claim.
+  const line = (i) => `Fact number ${i} states that shard ${i} held ${i} records.\n\n`;
+  const text = Array.from({ length: 300 }, (_, i) => line(i)).join('');
+
+  const result = await c.ingest({ text, filename: 'overlap.md' });
+  // The payload comes back as stored, which is a JSON string.
+  const titles = result.proposals.map((p) =>
+    (typeof p.payload === 'string' ? JSON.parse(p.payload) : p.payload).title
+  );
+  assert.ok(titles.length > 5, `enough to be worth checking, got ${titles.length}`);
+  assert.equal(new Set(titles).size, titles.length, 'every proposed claim is distinct');
+});
+
+test('a model too slow for the job is skipped, not discovered by timing out', async (t) => {
+  // Measured on this hardware: llama3.2 needs about 86 seconds for a
+  // 1,000-character piece. A 25-piece document is half an hour. Without this
+  // the router learns that one timeout at a time.
+  const slow = {
+    id: 'slow-model',
+    label: 'slow',
+    locality: 'local',
+    cost: 'free',
+    available: async () => true,
+    capabilities: {
+      [Capability.ExtractClaims]: {
+        quality: 0.9,
+        latencyMs: 10,
+        run: async () => ({ claims: [{ text: 'a claim', kind: 'note', epistemic: 'observation', confidence: 0.8, offset: 0 }] }),
+      },
+    },
+  };
+  const c = new Chitraq({ path: ':memory:', providers: [slow] });
+  t.after(() => c.close());
+
+  const { newRunId, now } = await import('../src/core/ids.js');
+  for (let i = 0; i < 4; i++) {
+    c.db
+      .prepare(
+        `INSERT INTO capability_run (id,workspace_id,capability,provider,task,context_ids,result,status,latency_ms,cost_micros,started_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+      )
+      .run(newRunId(), c.workspaceId, 'extract.claims', 'slow-model', '{}', '[]', '{}', 'ok', 86_000, 0, now());
+  }
+
+  const line = (i) => `Measurement ${i}: latency was ${i} ms on shard ${i}.\n\n`;
+  const result = await c.ingest({
+    text: Array.from({ length: 400 }, (_, i) => line(i)).join(''),
+    filename: 'big.md',
+  });
+
+  assert.equal(result.extractedBy, 'builtin');
+  assert.ok(result.skippedModel, 'and it says it made that choice');
+  assert.match(result.skippedModel.reason, /too slow/);
+  assert.ok(result.proposals.length > 20, 'the floor still did the work');
 });
