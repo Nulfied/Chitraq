@@ -344,7 +344,10 @@ export function entities(text) {
     for (const m of text.matchAll(re)) {
       // Cue patterns match a phrase but mean only the name inside it: "based in
       // Pune" is a place called Pune, not one called "based in Pune".
-      const value = (group === 'first' ? firstGroup(m) : m[0])?.trim();
+      const value = clean(group === 'first' ? firstGroup(m) : m[0]);
+      // Cue patterns used to skip the cleaning the capitalised-word sweep did,
+      // so "the billing API" produced a product called "The" and "All API
+      // calls" one called "All".
       if (!value) continue;
 
       remember(found, { text: value, type, confidence, offset: m.index ?? 0 });
@@ -367,21 +370,20 @@ export function entities(text) {
     // A leading article or cue word is grammar, not part of the name. Left in,
     // "The Atlas migration" yields a person called The Atlas, and "Project
     // Nimbus" one called Project Nimbus — both alongside the correct project.
-    const value = m[1]
-      .trim()
-      .replace(/\s+(of|and|&)$/i, '')
-      .replace(LEADING_NOISE, '')
-      .trim();
-    if (value.length < 3) continue;
-    if (STOPISH_CAPS.has(value.toLowerCase())) continue;
+    const value = clean(m[1]);
+    if (!value) continue;
 
     const atSentenceStart = startsSentence(text, m.index ?? 0);
     if (atSentenceStart && !value.includes(' ')) continue;
 
     const multiWord = value.includes(' ');
+    const type = typeOfCapitalisedRun(value);
+    // Nothing recognisable. Better an absent entity than an invented one.
+    if (!type) continue;
+
     remember(found, {
       text: value,
-      type: typeOfCapitalisedRun(value),
+      type,
       // A multi-word capitalised run is a fair bet. A single capitalised word
       // is not — it is as likely to be a product, a month or the start of a
       // clause the sentence splitter mishandled.
@@ -411,7 +413,74 @@ export function entities(text) {
 function typeOfCapitalisedRun(value) {
   if (ORG_SUFFIX.test(value)) return 'organisation';
   if (isKnownPlace(value)) return 'place';
-  return 'name';
+  // A person is a shape, not a fallback.
+  //
+  // Treating every leftover capitalised run as a name is right for prose about
+  // people and badly wrong for documentation, which is full of Title Case
+  // headings. On a real corpus of technical docs it invented twenty-two people
+  // with names like "Grammar Resolutions" and "Halka Memory Model".
+  return looksLikePersonName(value) ? 'name' : null;
+}
+
+/**
+ * Nouns that end a phrase about a thing, never a person's name.
+ *
+ * Short and specific on purpose. Each of these actually appeared as the last
+ * word of a fabricated "person" in the first real corpus.
+ */
+const NOT_A_SURNAME = new Set([
+  'rules', 'proposal', 'server', 'model', 'project', 'design', 'specification',
+  'objects', 'structure', 'interpolation', 'resolutions', 'reference', 'guide',
+  'notes', 'summary', 'overview', 'status', 'roadmap', 'syntax', 'grammar',
+  'api', 'sdk', 'cli', 'spec', 'docs', 'readme', 'license', 'changelog',
+  'support', 'tooling', 'toolchain', 'runtime', 'compiler', 'parser', 'engine',
+  'memory', 'language', 'version', 'release', 'example', 'examples', 'test',
+  'tests', 'benchmark', 'benchmarks', 'performance', 'installation', 'usage',
+]);
+
+/**
+ * Does this look like somebody's name?
+ *
+ * Two to three capitalised words, none of them a word that ends a phrase about
+ * a thing, and no conjunction — "Strings & Interpolation" and "Halka and C" are
+ * headings, not people. This is deliberately strict: a missed person can be
+ * added by hand, while an invented one sits in the graph being traversed and
+ * has to be found and merged away.
+ *
+ * @param {string} value
+ */
+function looksLikePersonName(value) {
+  const words = value.split(/[ \t]+/);
+  if (words.length < 2 || words.length > 3) return false;
+  if (/[&]|\b(and|of|the|for|with|in|on)\b/i.test(value)) return false;
+  if (NOT_A_SURNAME.has(words[words.length - 1].toLowerCase())) return false;
+
+  // Each word is either a proper word or an initial — "Priya R Rao" is a name
+  // and rejecting it was the first thing this rule got wrong. At least two
+  // must be full words, so "A B" is not a person.
+  const proper = /^[A-Z][\p{Ll}]+$/u;
+  const initial = /^[A-Z]\.?$/;
+  if (!words.every((w) => proper.test(w) || initial.test(w))) return false;
+  return words.filter((w) => proper.test(w)).length >= 2;
+}
+
+/**
+ * Trim a candidate down to the name inside it, or nothing.
+ *
+ * One place, so a pattern added later cannot forget to do it.
+ *
+ * @param {string|null|undefined} raw
+ * @returns {string|null}
+ */
+function clean(raw) {
+  const value = String(raw ?? '')
+    .trim()
+    .replace(/\s+(of|and|&)$/i, '')
+    .replace(LEADING_NOISE, '')
+    .trim();
+  if (value.length < 3) return null;
+  if (STOPISH_CAPS.has(value.toLowerCase())) return null;
+  return value;
 }
 
 /**
@@ -472,6 +541,10 @@ const STOPISH_CAPS = new Set([
   'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august',
   'september', 'october', 'november', 'december', 'the', 'this', 'that', 'there',
   'we', 'i', 'it', 'they', 'he', 'she', 'but', 'and', 'if', 'when', 'however',
+  // Determiners and quantifiers. They sit exactly where a name sits — "All
+  // API calls", "Each Server" — and can never be one.
+  'all', 'every', 'each', 'some', 'any', 'both', 'no', 'most', 'many', 'few',
+  'several', 'another', 'other', 'such', 'only', 'also', 'these', 'those',
 ]);
 
 // ----------------------------------------------------------------- claims
