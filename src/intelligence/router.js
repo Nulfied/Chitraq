@@ -406,10 +406,18 @@ function extractUncertainty(result) {
  * @returns {number|null} median latency in ms
  */
 export function measuredLatency(db, q) {
+  // Timeouts count, and they count as at least what they cost.
+  //
+  // Only measuring successes means a provider that times out teaches nothing,
+  // so the next document pays the same wait to learn the same thing. A run
+  // that was cut off at seventy seconds is evidence the work takes *more*
+  // than seventy seconds, which is exactly what a "is this worth trying"
+  // decision needs.
   const rows = db
     .prepare(
       `SELECT latency_ms FROM capability_run
-       WHERE workspace_id = ? AND capability = ? AND provider = ? AND status = 'ok'
+       WHERE workspace_id = ? AND capability = ? AND provider = ?
+         AND status IN ('ok', 'timeout')
          AND latency_ms IS NOT NULL
        ORDER BY started_at DESC LIMIT 20`
     )

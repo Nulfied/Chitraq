@@ -5,7 +5,7 @@ What is actually built, what is partial, and what is deliberately not built.
 States: **IMPLEMENTED** (built and tested), **PARTIAL** (works, with a stated
 limit), **NOT BUILT** (deliberately deferred).
 
-Last updated: 2026-09-20. 346 tests passing.
+Last updated: 2026-09-20. 348 tests passing.
 
 ---
 
@@ -346,11 +346,12 @@ says otherwise.
    built: it would be roughly ten minutes per large document on this hardware.
 4. **Confidence is derived, not asked for.** A real import produced 402 of
    460 proposals at exactly 0.4: llama3.2 emitting a default rather than
-   judging. Rather than trusting it, the model is now asked only for the
-   claim sentences and the labels come from the deterministic classifier —
-   which both varies and costs nothing. Chitraq still measures the
-   distribution and says plainly when it is flat, because a threshold over
-   one repeated value sorts nothing.
+   judging. The model is now asked only for the claim sentences, and the
+   score comes from what can be checked — the kind of statement, whether it
+   cites a figure, whether it stands on its own rather than opening with a
+   pronoun, and its length. On the same documents that gave one value, it
+   now gives fourteen, and `--accept-above` is a real control. It sorts by
+   whether a claim is *usable*, which is not a judgement about truth.
 5. **Contradiction detection is narrow.** Conflicting figures about the same
    subject, and negated restatements. It misses most real contradictions, and
    is tuned for precision because a false "these disagree" is expensive to

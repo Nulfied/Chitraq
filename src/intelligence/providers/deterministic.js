@@ -632,14 +632,61 @@ const CUES = [
  * @param {string} sentence
  * @param {boolean} isQuestion
  */
+/**
+ * How much a claim is worth reviewing, from properties that can be checked.
+ *
+ * The cue-based confidence answers "what kind of statement is this", and on
+ * real documents most sentences are none of the interesting kinds, so 402 of
+ * 460 proposals came back at the same 0.4 and a review threshold sorted
+ * nothing.
+ *
+ * These four adjustments are about whether a claim is *usable* rather than
+ * what it asserts, and each is something a person would notice:
+ *
+ *   - a figure makes a claim checkable later, and worth keeping
+ *   - a leading pronoun means it does not stand alone, which is the whole
+ *     point of a Knowledge Object
+ *   - too short carries no content; too long is two claims
+ *   - a proper noun gives it a subject rather than a floating assertion
+ *
+ * Deliberately small nudges. This is a sorting aid for a review queue, not a
+ * judgement about truth, and presenting it as more would be worse than the
+ * flat number it replaces.
+ *
+ * @param {string} sentence
+ * @param {number} base
+ */
+function usefulness(sentence, base) {
+  let score = base;
+
+  if (/\b\d/.test(sentence)) score += 0.08;
+  if (/^(it|this|that|they|these|those|he|she|there)\b/i.test(sentence.trim())) score -= 0.12;
+
+  const words = (sentence.match(/\S+/g) ?? []).length;
+  if (words < 8) score -= 0.08;
+  else if (words > 40) score -= 0.06;
+
+  if (/\b[A-Z][\p{Ll}]{2,}/u.test(sentence.replace(/^\W*\S+/, ''))) score += 0.05;
+
+  // Bounded well short of certainty at both ends: nothing here is evidence
+  // enough to call a claim worthless or beyond question.
+  return Math.round(Math.max(0.25, Math.min(0.85, score)) * 100) / 100;
+}
+
 export function classifySentence(sentence, isQuestion) {
-  if (isQuestion) return { kind: 'question', epistemic: 'belief', confidence: 0.75 };
+  if (isQuestion) {
+    return { kind: 'question', epistemic: 'belief', confidence: usefulness(sentence, 0.75) };
+  }
   for (const cue of CUES) {
     if (cue.re.test(sentence)) {
-      return { kind: cue.kind, epistemic: cue.epistemic, confidence: cue.confidence };
+      return {
+        kind: cue.kind,
+        epistemic: cue.epistemic,
+        confidence: usefulness(sentence, cue.confidence),
+      };
     }
   }
-  return { kind: 'note', epistemic: 'observation', confidence: 0.4 };
+  return { kind: 'note', epistemic: 'observation', confidence: usefulness(sentence, 0.4) };
 }
 
 /**

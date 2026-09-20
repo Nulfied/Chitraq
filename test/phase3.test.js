@@ -494,3 +494,51 @@ test('a conflict about retired knowledge stops being asked about', async (t) => 
   assert.ok(c.conflicts({ includeRetired: true }).length > 0, 'still on file');
   assert.ok(c.recall(a.object.id), 'and the surviving side is fine');
 });
+
+test('confidence reflects whether a claim is usable, not just its kind', async (t) => {
+  // Cue-based confidence answers "what kind of statement is this", and on
+  // real documents most sentences are none of the interesting kinds — 402 of
+  // 460 proposals at one value, so a threshold sorted nothing. These
+  // adjustments are about whether a claim stands on its own.
+  const c = new Chitraq({ path: ':memory:' });
+  t.after(() => c.close());
+
+  const result = await c.ingest({
+    text: [
+      'The team measured p99 latency at 38 milliseconds across 14000 chunks.',
+      'It might not hold.',
+      'We decided to keep the engine dependency-free.',
+      'Running out of budget degrades intelligence, never memory.',
+    ].join(' '),
+    filename: 'mixed.md',
+  });
+
+  const byText = new Map(
+    result.proposals.map((p) => {
+      const payload = typeof p.payload === 'string' ? JSON.parse(p.payload) : p.payload;
+      return [payload.title, p.confidence];
+    })
+  );
+
+  const measured = [...byText].find(([t2]) => t2.includes('38 milliseconds'))?.[1];
+  const plain = [...byText].find(([t2]) => t2.includes('degrades intelligence'))?.[1];
+
+  assert.ok(measured > plain, `a checkable figure outranks a plain note: ${measured} vs ${plain}`);
+  assert.ok(new Set(byText.values()).size > 1, 'confidence is not one repeated value');
+});
+
+test('a dangling pronoun costs a claim confidence', async (t) => {
+  const c = new Chitraq({ path: ':memory:' });
+  t.after(() => c.close());
+
+  const { claims } = await import('../src/intelligence/providers/deterministic.js');
+  const standalone = claims('Chitraq records every version so that history is never rewritten.', 5);
+  const dangling = claims('It records every version so that history is never rewritten.', 5);
+
+  // A Knowledge Object has to make sense on its own; one that opens with a
+  // pronoun does not.
+  assert.ok(
+    dangling[0].confidence < standalone[0].confidence,
+    `${dangling[0].confidence} should be below ${standalone[0].confidence}`
+  );
+});
