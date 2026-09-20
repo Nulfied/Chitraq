@@ -5,7 +5,7 @@ What is actually built, what is partial, and what is deliberately not built.
 States: **IMPLEMENTED** (built and tested), **PARTIAL** (works, with a stated
 limit), **NOT BUILT** (deliberately deferred).
 
-Last updated: 2026-09-20. 333 tests passing.
+Last updated: 2026-09-20. 335 tests passing.
 
 ---
 
@@ -322,18 +322,26 @@ says otherwise.
 1. **The built-in embedder is lexical, not semantic.** It will not connect "car"
    to "automobile". It scores itself 0.35 so any real model outranks it.
    Installing Ollama is the single biggest retrieval improvement available.
-2. **Deterministic claim extraction is segmentation, not comprehension.** It
+2. **A local 3B model is worse than the segmenter on long documents.**
+   Measured on a 41,000-character specification: llama3.2 took 80 seconds and
+   returned *one* claim; the deterministic segmenter finds 46 to 69. On a real
+   import of 27 documents the model timed out on four and served one, and the
+   floor did the other twenty-six — which produced better extraction than the
+   model would have. Falling back is now reported rather than silent. Chunked
+   extraction, so the model sees pieces it can handle, is the fix and is not
+   built: it would be roughly ten minutes per large document on this hardware.
+3. **Deterministic claim extraction is segmentation, not comprehension.** It
    produces more noise than a language model would — which is why everything it
    produces is a proposal.
-3. **Contradiction detection is narrow.** Conflicting figures about the same
+4. **Contradiction detection is narrow.** Conflicting figures about the same
    subject, and negated restatements. It misses most real contradictions, and is
    tuned for precision because a false "these disagree" is expensive to read.
-4. **Concurrency is SQLite WAL and nothing more.** Fine for one user and one
+5. **Concurrency is SQLite WAL and nothing more.** Fine for one user and one
    process. A multi-user server needs work not yet done.
-5. **Nothing watches anything unless you start it.** `chitraq watch` is a
+6. **Nothing watches anything unless you start it.** `chitraq watch` is a
    foreground command that dies with the terminal. Sync has no watch mode at
    all, and there is still no timer, no service and no background exchange.
-6. **Entity extraction is weak on technical documentation.** Measured on a
+7. **Entity extraction is weak on technical documentation.** Measured on a
    real corpus of 27 project documents (460 objects): the first run produced
    33 entities of which about four were real, because documentation is nothing
    but Title Case and every capitalised run was read as a person. After
@@ -343,13 +351,13 @@ says otherwise.
    3 are common nouns the product pattern caught (`Rules`, `Gate`,
    `Provenance`). Better, still not good. Prose about people works far better
    than documentation does; a model would do this properly.
-7. **Concepts are the weakest entity kind.** They are found by recurrence
+8. **Concepts are the weakest entity kind.** They are found by recurrence
    across separate notes, which is honest but shallow: it finds phrases you
    repeat, not ideas you hold. Everything it produces is a proposal, and
    confidence is capped well below the shape-based kinds.
-8. **Fax-encoded scans still cannot be read.** `CCITTFaxDecode` and
+9. **Fax-encoded scans still cannot be read.** `CCITTFaxDecode` and
    `JBIG2Decode` need real decoders. Detected and named, never guessed at.
-9. **An unlocked vault lives in process memory.** Something that can read this
+10. **An unlocked vault lives in process memory.** Something that can read this
    process can read the data key. Defending against that is a different order
    of problem and is not attempted.
-10. **Video is captured but not read.** Nothing extracts its audio track.
+11. **Video is captured but not read.** Nothing extracts its audio track.

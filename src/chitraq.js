@@ -630,7 +630,7 @@ export class Chitraq {
     // way the output is proposals, never direct writes.
     const run = await this.router.tryRun(
       Capability.ExtractClaims,
-      { text: parsed.text, title: parsed.title, limit: 20 },
+      { text: parsed.text, title: parsed.title, limit: claimBudget(parsed.text) },
       { workspaceId: this.workspaceId }
     );
 
@@ -680,7 +680,19 @@ export class Chitraq {
       if (a.kind === 'object') await this.#index(objects.get(this.db, a.id));
     }
 
-    return { source, parsed, proposals, accepted, deduplicated: false, reading };
+    return {
+      source,
+      parsed,
+      proposals,
+      accepted,
+      deduplicated: false,
+      reading,
+      // Which extractor actually did this, and what failed first. Without it
+      // a timed-out model looks identical to a model that ran.
+      extractedBy: run?.provider ?? null,
+      degraded: run?.degraded ?? false,
+      fellBackFrom: run?.fellBackFrom ?? null,
+    };
   }
 
   /**
@@ -820,7 +832,13 @@ export class Chitraq {
           duplicates.push({ file, sourceId: result.source.id });
           outcome = 'already captured';
         } else {
-          captured.push({ file, sourceId: result.source.id, proposals: result.proposals.length });
+          captured.push({
+            file,
+            sourceId: result.source.id,
+            proposals: result.proposals.length,
+            extractedBy: result.extractedBy,
+            fellBackFrom: result.fellBackFrom,
+          });
           proposed += result.proposals.length;
           accepted += result.accepted.length;
           outcome = 'captured';
@@ -828,7 +846,9 @@ export class Chitraq {
             ? `no text — needs ${result.parsed.needsCapability}`
             : opts.extract === false
               ? `${words(result.parsed.text)} words`
-              : `${result.proposals.length} proposed`;
+              : result.fellBackFrom?.length
+                ? `${result.proposals.length} proposed — ${result.fellBackFrom[0].provider} ${result.fellBackFrom[0].reason}`
+                : `${result.proposals.length} proposed`;
         }
       } catch (err) {
         failures.push({ file, error: err?.message ?? String(err) });
@@ -2518,6 +2538,24 @@ function round4(n) {
 }
 
 /** @param {string} text */
+
+/**
+ * How many claims to ask for, given how much there is to read.
+ *
+ * A flat twenty was the same budget for an 800-word contributing guide and a
+ * 41,000-character specification — one claim per 340 words in the second case,
+ * which is not extraction, it is sampling. The segmenter alone finds 69 in
+ * that document when allowed to.
+ *
+ * Roughly one per 120 words, floored so short notes are unaffected and capped
+ * so a huge file cannot produce a review queue nobody will read.
+ *
+ * @param {string} text
+ */
+function claimBudget(text) {
+  const words = (String(text ?? '').match(/\S+/g) ?? []).length;
+  return Math.min(200, Math.max(20, Math.round(words / 120)));
+}
 
 /**
  * How much doubt a machine reading adds.

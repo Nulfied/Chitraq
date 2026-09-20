@@ -167,6 +167,14 @@ async function run(command, rest, flags, c) {
         break;
       }
       console.log(`  proposed    ${result.proposals.length} pieces of knowledge`);
+      // Which extractor did it, when it was not the best one available. A
+      // timed-out model otherwise looks exactly like a model that ran.
+      if (result.fellBackFrom?.length) {
+        for (const f of result.fellBackFrom) {
+          console.log(`  ⚠ ${f.provider} ${f.reason} after ${Math.round(f.ms / 1000)}s`);
+        }
+        console.log(`  read by     ${result.extractedBy} instead`);
+      }
       if (result.accepted.length) console.log(`  accepted    ${result.accepted.length} automatically by policy`);
       console.log(`\n  Nothing was written to memory yet. Review with: chitraq review\n`);
       break;

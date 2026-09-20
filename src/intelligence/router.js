@@ -197,6 +197,8 @@ export class Router {
 
     /** @type {string[]} */
     const attempted = [];
+    /** @type {Array<{provider: string, reason: string, ms: number}>} */
+    const failures = [];
     let lastError = null;
 
     for (const provider of eligible) {
@@ -233,9 +235,21 @@ export class Router {
           provider: provider.id,
           // Degraded means: answered, but only by the deterministic floor.
           degraded: !!provider.deterministic && eligible.length > 1,
+          // What was tried and what went wrong on the way here. Falling
+          // through is the design — memory never depends on a model — but a
+          // silent fallthrough lets someone believe a model did work it did
+          // not. On a real import, 26 of 27 documents were extracted by the
+          // floor after the model timed out, and nothing said so.
+          attempted: [...attempted],
+          fellBackFrom: failures.length ? [...failures] : null,
         };
       } catch (err) {
         lastError = err;
+        failures.push({
+          provider: provider.id,
+          reason: err?.name === 'TimeoutError' ? 'timed out' : String(err?.message ?? err),
+          ms: Date.now() - t0,
+        });
         this.registry.healthCache.set(provider.id, { ok: false, checkedAt: Date.now() });
         this.#record({
           runId,

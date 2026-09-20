@@ -33,16 +33,36 @@ export function ollamaProvider(opts = {}) {
   const timeoutMs = opts.timeoutMs ?? 60_000;
 
   /**
+   * How long to allow, given how much the model has to read.
+   *
+   * A flat sixty seconds is fine for a question and far too short for a
+   * 41,000-character specification. Measured on an i7-8550U with no GPU, that
+   * document took 81 seconds — so on a real import the model timed out on
+   * every large file and the deterministic floor quietly did the work
+   * instead. Reading speed is roughly linear in input, so the allowance is
+   * too.
+   *
+   * @param {string} text
+   */
+  function budgetFor(text) {
+    const chars = String(text ?? '').length;
+    return Math.min(maxTimeoutMs, timeoutMs + Math.round(chars / 400) * 1000);
+  }
+
+  /** Nothing waits longer than this, however large the input. */
+  const maxTimeoutMs = opts.maxTimeoutMs ?? 600_000;
+
+  /**
    * @param {string} path
    * @param {object} body
    * @returns {Promise<any>}
    */
-  async function post(path, body) {
+  async function post(path, body, allowMs) {
     const res = await fetch(`${baseUrl}${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.timeout(allowMs ?? timeoutMs),
     });
     if (!res.ok) {
       throw new Error(`Ollama ${path} returned ${res.status}: ${(await res.text()).slice(0, 200)}`);
@@ -60,14 +80,18 @@ export function ollamaProvider(opts = {}) {
    * @param {{system: string, prompt: string, schema: object}} req
    */
   async function askJson({ system, prompt, schema }) {
-    const data = await post('/api/generate', {
-      model,
-      system,
-      prompt,
-      format: schema,
-      stream: false,
-      options: { temperature: 0 },
-    });
+    const data = await post(
+      '/api/generate',
+      {
+        model,
+        system,
+        prompt,
+        format: schema,
+        stream: false,
+        options: { temperature: 0 },
+      },
+      budgetFor(prompt)
+    );
     try {
       return JSON.parse(data.response);
     } catch {
@@ -160,7 +184,10 @@ export function ollamaProvider(opts = {}) {
 
       [Capability.ExtractClaims]: {
         quality: 0.68,
-        latencyMs: 4000,
+        // Measured, not guessed: a 41,000-character document takes about 80
+        // seconds on a laptop with no GPU. The old declared 4 s was for a
+        // paragraph, and the router used it to decide this was the fast option.
+        latencyMs: 30_000,
         costMicros: 0,
         run: async (task) => {
           const result = await askJson({

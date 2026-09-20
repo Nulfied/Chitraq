@@ -17,6 +17,7 @@ import { createServer } from 'node:http';
 
 import { Chitraq } from '../src/chitraq.js';
 import { ollamaProvider } from '../src/intelligence/providers/ollama.js';
+import { Capability } from '../src/intelligence/registry.js';
 
 /**
  * A stand-in Ollama. Mirrors the real API: /api/tags, /api/embed, /api/generate.
@@ -335,4 +336,52 @@ test('a grounded:true flag with no answer is not treated as an answer', async ()
   assert.equal(result.answer, null);
   assert.deepEqual(result.citations, []);
   await ollama.close();
+});
+
+test('a fallthrough is reported, not silent', async (t) => {
+  // On a real import, 26 of 27 documents were extracted by the deterministic
+  // floor after the model timed out, and the output said only "20 proposed".
+  // A timed-out model must not look like a model that ran.
+  const slow = {
+    id: 'slow-model',
+    label: 'a model that never answers',
+    locality: 'local',
+    cost: 'free',
+    available: async () => true,
+    capabilities: {
+      [Capability.ExtractClaims]: {
+        quality: 0.9,
+        latencyMs: 10,
+        run: () => new Promise((_, reject) => setTimeout(() => reject(new Error('too slow')), 20)),
+      },
+    },
+  };
+
+  const c = new Chitraq({ path: ':memory:', providers: [slow] });
+  t.after(() => c.close());
+
+  const result = await c.ingest({
+    text: 'We decided to keep the engine dependency-free. The team measured p99 latency at 38ms.',
+    filename: 'notes.md',
+  });
+
+  assert.equal(result.extractedBy, 'builtin', 'the floor served it');
+  assert.equal(result.degraded, true);
+  assert.ok(result.fellBackFrom?.length, 'and it says what failed');
+  assert.equal(result.fellBackFrom[0].provider, 'slow-model');
+  assert.ok(result.proposals.length > 0, 'capture still produced knowledge');
+});
+
+test('the claim budget scales with the document', async (t) => {
+  // A flat twenty gave an 800-word guide and a 41,000-character specification
+  // the same budget — one claim per 340 words in the second case.
+  const c = new Chitraq({ path: ':memory:' });
+  t.after(() => c.close());
+
+  const sentence = 'The team measured p99 latency at 38 milliseconds across the index. ';
+  const short = await c.ingest({ text: sentence.repeat(3), filename: 'short.md' });
+  const long = await c.ingest({ text: sentence.repeat(400), filename: 'long.md' });
+
+  assert.ok(long.proposals.length > short.proposals.length, 'a longer document yields more');
+  assert.ok(long.proposals.length > 20, `flat 20 would have capped this, got ${long.proposals.length}`);
 });
