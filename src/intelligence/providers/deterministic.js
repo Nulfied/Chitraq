@@ -307,10 +307,15 @@ const ENTITY_PATTERNS = [
     group: 'first',
   },
   {
-    // A capitalised name immediately followed by a version is a product
-    // essentially always: "Postgres 16", "Node 24.18", "Python 3.11".
+    // A capitalised name followed by a *version* is a product: "Postgres 16",
+    // "Node 24.18", "Python 3.11", "Halka v49".
+    //
+    // The number has to look like a version. A bare single digit is far more
+    // often an ordinal, and taking those produced a product called "Gate"
+    // from "a null Gate 2 outcome" and one called "Rules" from "Locked
+    // Rules 1-15". So: dotted, or v-prefixed, or two digits and up.
     type: 'product',
-    re: /\b([A-Z][\w.+-]{2,})\s+v?\d+(?:\.\d+)*\b/g,
+    re: /\b([A-Z][\w.+-]{2,})\s+(?:v\d+|\d+\.\d+(?:\.\d+)*|\d{2,})\b/g,
     confidence: 0.75,
     group: 'first',
   },
@@ -352,6 +357,10 @@ function isTableRow(sentence) {
  */
 export function entities(text) {
   if (!text) return [];
+  // Paths, code spans and links are addresses, not sentences. Left in, a
+  // Windows path produced a *person* called "Sublime Text" from
+  // `%APPDATA%\\Sublime Text\\Packages`.
+  text = withoutAddresses(text);
   /** @type {Map<string, any>} */
   const found = new Map();
 
@@ -463,6 +472,8 @@ const NOT_A_SURNAME = new Set([
   'support', 'tooling', 'toolchain', 'runtime', 'compiler', 'parser', 'engine',
   'memory', 'language', 'version', 'release', 'example', 'examples', 'test',
   'tests', 'benchmark', 'benchmarks', 'performance', 'installation', 'usage',
+  'text', 'editor', 'studio', 'code', 'console', 'terminal', 'shell', 'kit',
+  'suite', 'pack', 'packages', 'plugin', 'extension', 'library', 'framework',
 ]);
 
 /**
@@ -547,6 +558,21 @@ function remember(found, candidate) {
 function startsSentence(text, index) {
   if (index === 0) return true;
   return /(?:^|[.!?:;]|\n)\s*$/.test(text.slice(Math.max(0, index - 12), index));
+}
+
+/**
+ * Remove the parts of a document that name a location rather than a thing.
+ *
+ * @param {string} text
+ */
+function withoutAddresses(text) {
+  return String(text)
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`[^`]*`/g, ' ')
+    .replace(/\bhttps?:\/\/\S+/gi, ' ')
+    .replace(/%\w+%[\\/][^\s"']*/g, ' ')
+    .replace(/\b[A-Za-z]:\\[^\s"']*/g, ' ')
+    .replace(/\.{0,2}[\\/][\w.-]+(?:[\\/][\w.-]+)+/g, ' ');
 }
 
 /** @param {RegExpMatchArray} m */

@@ -248,3 +248,49 @@ test('a batched sync says there is more, and loses nothing across rounds', async
   const onB = Number(b.chitraq.db.prepare("SELECT COUNT(*) n FROM object WHERE kind != 'entity'").get().n);
   assert.equal(onB, 12, 'every note arrived across the rounds');
 });
+
+test('a later relation cannot advance the cursor past unsent objects', async (t) => {
+  // One high-water mark is shared by objects, relations, sources, evidence
+  // and derivations, each truncated at the row limit independently. Taking
+  // the highest timestamp across all of them moved the mark past rows never
+  // sent: with a limit of 5, a batch of 5 objects and 2 later relations
+  // skipped six notes, and they were never transmitted.
+  const { changesSince } = await import('../src/core/sync.js');
+  const c = new Chitraq({ path: ':memory:' });
+  t.after(() => c.close());
+
+  for (let i = 0; i < 12; i++) {
+    await c.remember({ title: `Note ${i}`, body: `Body number ${i}.` });
+  }
+
+  const everything = new Set(c.db.prepare('SELECT id FROM object').all().map((r) => String(r.id)));
+  const carried = new Set();
+
+  let since = null;
+  for (let round = 0; round < 15; round++) {
+    const payload = changesSince(c.db, { workspaceId: c.workspaceId, since, limit: 5 });
+    if (!payload.objects.length) break;
+    for (const o of payload.objects) carried.add(String(o.id));
+    if (payload.cursor === since) break;
+    since = payload.cursor;
+  }
+
+  // Duplicates across batches are fine — `apply` skips anything identical.
+  // Anything never carried is gone, which is the outcome sync must never have.
+  const missing = [...everything].filter((id) => !carried.has(id));
+  assert.deepEqual(missing, [], `${missing.length} object(s) were never sent`);
+});
+
+test('the payload is only complete when every stream is', async (t) => {
+  const { changesSince } = await import('../src/core/sync.js');
+  const c = new Chitraq({ path: ':memory:' });
+  t.after(() => c.close());
+
+  for (let i = 0; i < 12; i++) await c.remember({ title: `Note ${i}`, body: `Body ${i}.` });
+
+  const truncated = changesSince(c.db, { workspaceId: c.workspaceId, since: null, limit: 5 });
+  assert.equal(truncated.complete, false, 'five of twelve is not everything');
+
+  const whole = changesSince(c.db, { workspaceId: c.workspaceId, since: null, limit: 500 });
+  assert.equal(whole.complete, true);
+});

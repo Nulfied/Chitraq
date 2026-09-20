@@ -82,10 +82,24 @@ export function changesSince(db, opts) {
     limit
   );
 
+  const sources = q(
+    `SELECT id, workspace_id, uri, media_type, title, byte_size, content_hash, text, meta, captured_at, origin
+     FROM source WHERE workspace_id = ? AND captured_at > ? ORDER BY captured_at LIMIT ?`,
+    limit
+  );
+  const evidence = q(
+    `SELECT * FROM evidence WHERE workspace_id = ? AND created_at > ? ORDER BY created_at LIMIT ?`,
+    limit
+  );
+  const derivations = q(
+    `SELECT * FROM derivation WHERE workspace_id = ? AND created_at > ? ORDER BY created_at LIMIT ?`,
+    limit
+  );
+
   // A payload that hit the row limit is a partial answer, and a partial answer
-  // that does not say so is the worst kind. The cursor still advances correctly,
-  // so syncing again fetches the next batch — but somebody has to know to do it.
-  const complete = objects.length < limit && relations.length < limit;
+  // that does not say so is the worst kind. Somebody has to know to ask again.
+  const streams = [objects, relations, sources, evidence, derivations];
+  const complete = streams.every((rows) => rows.length < limit);
 
   return {
     format: SYNC_FORMAT,
@@ -95,25 +109,44 @@ export function changesSince(db, opts) {
     // The high-water mark the peer should send back next time. Taken from the
     // data rather than the clock, so a skewed clock cannot cause changes to be
     // skipped on the next exchange.
-    cursor: highWaterMark([...objects, ...relations], opts.since ?? null),
+    cursor: safeCursor(streams, limit, opts.since ?? null),
     generatedAt: now(),
     objects,
     versions,
     relations,
-    sources: q(
-      `SELECT id, workspace_id, uri, media_type, title, byte_size, content_hash, text, meta, captured_at, origin
-       FROM source WHERE workspace_id = ? AND captured_at > ? ORDER BY captured_at LIMIT ?`,
-      limit
-    ),
-    evidence: q(
-      `SELECT * FROM evidence WHERE workspace_id = ? AND created_at > ? ORDER BY created_at LIMIT ?`,
-      limit
-    ),
-    derivations: q(
-      `SELECT * FROM derivation WHERE workspace_id = ? AND created_at > ? ORDER BY created_at LIMIT ?`,
-      limit
-    ),
+    sources,
+    evidence,
+    derivations,
   };
+}
+
+/**
+ * The furthest point every stream has actually been sent up to.
+ *
+ * One mark is shared by objects, relations, sources, evidence and
+ * derivations, and each is truncated at the row limit independently. Taking
+ * the highest timestamp across all of them moves the mark past rows that were
+ * never sent: with a limit of five, a batch carrying five objects and two
+ * later relations advanced the cursor past six objects, and they were never
+ * transmitted. Sync losing knowledge silently is the one outcome the whole
+ * design exists to prevent.
+ *
+ * So a truncated stream caps the mark at its own last row, and the safe point
+ * is the lowest of those caps. Rows other streams already sent beyond it will
+ * be offered again, which is wasted bandwidth and nothing worse — `apply`
+ * skips anything identical.
+ *
+ * @param {any[][]} streams
+ * @param {number} limit
+ * @param {string|null} since
+ */
+function safeCursor(streams, limit, since) {
+  const caps = streams
+    .filter((rows) => rows.length >= limit)
+    .map((rows) => highWaterMark(rows, since));
+
+  if (!caps.length) return highWaterMark(streams.flat(), since);
+  return caps.reduce((lowest, mark) => (mark < lowest ? mark : lowest));
 }
 
 /**
@@ -123,7 +156,9 @@ export function changesSince(db, opts) {
 function highWaterMark(rows, fallback) {
   let max = fallback ?? '0000';
   for (const r of rows) {
-    const stamp = r.updated_at ?? r.created_at;
+    // Sources are stamped `captured_at`; everything else uses updated_at or
+    // created_at. Missing it here left sources out of the mark entirely.
+    const stamp = r.updated_at ?? r.created_at ?? r.captured_at;
     if (stamp && stamp > max) max = stamp;
   }
   return max;

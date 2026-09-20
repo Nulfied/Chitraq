@@ -5,7 +5,7 @@ What is actually built, what is partial, and what is deliberately not built.
 States: **IMPLEMENTED** (built and tested), **PARTIAL** (works, with a stated
 limit), **NOT BUILT** (deliberately deferred).
 
-Last updated: 2026-09-20. 348 tests passing.
+Last updated: 2026-09-20. 350 tests passing.
 
 ---
 
@@ -365,7 +365,7 @@ says otherwise.
 7. **Nothing watches anything unless you start it.** `chitraq watch` is a
    foreground command that dies with the terminal. Sync has no watch mode at
    all, and there is still no timer, no service and no background exchange.
-8. **Entity extraction is weak on technical documentation.** Measured on a
+8. **Entity extraction is sparse on technical documentation.** Measured on a
    real corpus of 27 project documents (460 objects): the first run produced
    33 entities of which about four were real, because documentation is nothing
    but Title Case and every capitalised run was read as a person. After
