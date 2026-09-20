@@ -19,7 +19,7 @@ account to create and no API bill.
 ```bash
 git clone https://github.com/Nulfied/Chitraq
 cd chitraq
-npm test                                     # 406 tests, no install step
+npm test                                     # 408 tests, no install step
 
 node scripts/seed.js demo/memory.chitraq     # build a demo memory
 node src/server/serve.js --db demo/memory.chitraq
@@ -497,7 +497,7 @@ limit, and how to report something privately.
 npm test
 ```
 
-406 tests covering the invariants, not just the happy path: that AI cannot
+408 tests covering the invariants, not just the happy path: that AI cannot
 overwrite your edges, that a stale proposal is refused at accept time, that
 memory survives the total loss of every intelligence provider, that superseded
 pricing never appears as current, that two devices editing the same note raises
