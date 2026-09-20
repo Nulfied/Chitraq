@@ -55,6 +55,7 @@ import { parseSource } from './capture/parse.js';
 import { planFolder } from './capture/folder.js';
 import { watchFolder, displayPath, resolveReal } from './capture/watch.js';
 import { estimateTokens, chunk as chunkText, normalise } from './core/text.js';
+import { verifyKey } from './cli/setup.js';
 
 export { Capability } from './intelligence/registry.js';
 export { Kind, Origin, Epistemic, State } from './core/objects.js';
@@ -458,6 +459,44 @@ export class Chitraq {
       ...k,
       active: this.registry.get(keyedIdFor(k.provider)) !== undefined,
     }));
+  }
+
+  /**
+   * Make one real call with a stored key and report whether it worked.
+   *
+   * A key that is stored but never exercised is one you find out about
+   * later, mid-task, from an error that does not mention credentials. This
+   * is how `chitraq setup` and `chitraq keys --test` know a provider is
+   * actually reachable rather than merely configured.
+   *
+   * The key is read, used and dropped. It is not returned, not logged, and
+   * not put anywhere the caller can reach it — the caller gets a verdict.
+   *
+   * @param {string} provider
+   * @param {{fetch?: typeof fetch}} [opts]
+   */
+  async verifyStoredKey(provider, opts = {}) {
+    const lock = this.keyLockState();
+    if (lock.exists && !lock.unlocked) {
+      return { ok: false, label: provider, error: 'These keys are behind a passphrase.' };
+    }
+
+    let key;
+    try {
+      key = keys.getKey(this.db, {
+        principalId: this.principal.id,
+        provider,
+        secret: this.keySecret,
+      });
+    } catch (err) {
+      return { ok: false, label: provider, error: err?.message ?? String(err) };
+    }
+    if (!key) return { ok: false, label: provider, error: 'No key stored for that provider.' };
+
+    return verifyKey(provider, key, {
+      ...(this.keyedProviderOptions[provider] ?? {}),
+      ...opts,
+    });
   }
 
   /** @param {{provider?: string, id?: string}} q */

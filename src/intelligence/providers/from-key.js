@@ -13,6 +13,7 @@
 
 import { anthropicProvider } from './anthropic.js';
 import { whisperProvider } from './whisper.js';
+import { openAiCompatibleProvider, PRESETS } from './openai-compatible.js';
 
 /** How a stored key becomes a working provider. */
 const BUILDERS = {
@@ -37,6 +38,29 @@ const BUILDERS = {
       model: opts.model,
       apiKey: key,
     }),
+
+  // Everything that speaks the OpenAI chat shape gets a builder of its own,
+  // so `chitraq keys --set groq` works the same way `--set anthropic` does
+  // and the key store stays ignorant that they share an adapter.
+  ...Object.fromEntries(
+    Object.keys(PRESETS).map((preset) => [
+      preset,
+      /**
+       * @param {string} key
+       * @param {any} opts
+       */
+      (key, opts = {}) =>
+        openAiCompatibleProvider({
+          preset,
+          apiKey: key,
+          baseUrl: opts.baseUrl,
+          model: opts.model,
+          // Threaded through so setup can verify a key against a stub in
+          // tests without reaching the network.
+          fetch: opts.fetch,
+        }),
+    ])
+  ),
 };
 
 /** Providers a key can currently be turned into. */
@@ -57,7 +81,14 @@ export function providerFromKey(provider, key, opts = {}) {
     ...built,
     // Distinct from an installation-wide provider of the same vendor, so both
     // can exist and the router can tell them apart.
-    id: `${built.id}:key`,
+    //
+    // Keyed off the *provider name*, not the adapter's own id. Those are the
+    // same for Anthropic and Whisper and are not for anything sharing an
+    // adapter: the OpenAI-compatible one calls itself
+    // `openai-compatible:groq`, which would have registered as
+    // `openai-compatible:groq:key` while `keyedIdFor('groq')` said
+    // `groq:key`. Nothing would have found the provider it had just built.
+    id: keyedIdFor(provider),
     label: `${built.label} (your key)`,
     keyed: true,
     keyOwner: opts.principalId ?? null,

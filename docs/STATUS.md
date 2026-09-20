@@ -5,7 +5,7 @@ What is actually built, what is partial, and what is deliberately not built.
 States: **IMPLEMENTED** (built and tested), **PARTIAL** (works, with a stated
 limit), **NOT BUILT** (deliberately deferred).
 
-Last updated: 2026-09-20. 370 tests passing.
+Last updated: 2026-09-20. 395 tests passing.
 
 ---
 
@@ -157,6 +157,7 @@ reported on the Status screen; not automatic.
 | **Whisper provider** | IMPLEMENTED | Protocol stand-in only; not run against a real engine |
 | **Scanned-PDF provider** | IMPLEMENTED | Serves `ocr.document` by delegating each page to `ocr.image` |
 | Claude provider | IMPLEMENTED | Structured outputs, refusal fallbacks, prompt caching |
+| **OpenAI-compatible provider** | IMPLEMENTED | One adapter, ten hosts, no dependency. Free tiers, paid APIs, and local servers |
 
 ### Provider verification status
 
@@ -182,10 +183,34 @@ reported on the Status screen; not automatic.
   transcription API: request shape, multipart body, error paths, result mapping.
   **Not run against a real engine**, because none is installed here. It should
   not be read as claiming more than that.
-- **Claude** — written against the current Messages API (structured outputs via
-  `output_config.format`, server-side refusal fallbacks, prompt caching on the
-  system block). Structurally exercised by the router's tests; **not run against
-  the live API**, since no key is configured.
+- **OpenAI-compatible** — one adapter over plain `fetch` for every host that
+  speaks the OpenAI chat shape: Groq, Gemini, Cerebras and GitHub Models on
+  their free tiers, OpenRouter, Mistral, DeepSeek and OpenAI on paid ones,
+  and llama.cpp, LM Studio or vLLM locally. **Driven end to end against a
+  live endpoint**: retrieval, context building, the shared prompts, the
+  provider call, parsing and attribution, with the answer coming back
+  credited to the provider that wrote it. Fourteen tests cover the protocol,
+  including the fallback for hosts that reject `json_schema`, fenced JSON,
+  and refusing to treat prose as an empty result.
+
+- **Claude** — written against the current Messages API (structured outputs
+  via `output_config.format`, server-side refusal fallbacks, prompt caching
+  on the system block). **The SDK call itself has still never run**, because
+  a key costs money and there is no budget for one.
+
+  What that means changed, though, and the change is the point. The prompts,
+  the schemas and every line that turns a reply into a proposal used to live
+  inside this adapter, so none of it had ever executed either. They now live
+  in `grounded.js`, shared with the OpenAI-compatible adapter — which runs
+  them for real, for free. What remains unverified is the forty lines that
+  build an Anthropic request. That is a much smaller claim than the one this
+  section used to have to make.
+
+  And `chitraq setup` closes the rest of the gap the only way it honestly
+  can: it makes a live call with whatever key you supply, shows you what came
+  back, and refuses to store a credential that did not work. The first person
+  with an Anthropic key verifies that path, at the moment they configure it,
+  without having to be told to.
 
 ## Capture — IMPLEMENTED
 

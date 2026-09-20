@@ -31,6 +31,14 @@ const DOCUMENTS = ['README.md', 'CONTRIBUTING.md', 'docs/STATUS.md', 'docs/index
  * Deliberately narrow. A document that says "the tests" or "1728 columns"
  * must not be rewritten, so this wants a number immediately followed by the
  * word, and a word boundary before it so it cannot start mid-number.
+ *
+ * **This owns every "<digits> tests" in the documents it checks.** It cannot
+ * tell the suite total from any other count, and it proved that by rewriting
+ * "14 tests cover the protocol" into "395 tests cover the protocol" — a
+ * sentence that was true, in a file about being accurate. Write other counts
+ * as words: "fourteen tests". Narrowing the pattern instead would mean
+ * guessing which numbers are the total, and guessing wrong in that direction
+ * lets a stale figure through, which is the thing this exists to stop.
  */
 const COUNT = /\b(\d{2,5}) tests\b/g;
 

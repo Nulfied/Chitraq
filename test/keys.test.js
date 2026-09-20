@@ -205,9 +205,13 @@ test('a key for a provider nothing can build is stored but honestly inactive', a
   const c = memory();
   t.after(() => c.close());
 
-  const result = c.setApiKey({ provider: 'openai', key: 'sk-proj-something-0000' });
+  // This used to say `openai`, which stopped being true the moment the
+  // OpenAI-compatible adapter arrived and made eleven providers buildable.
+  // The behaviour under test is unchanged — a key for something unknown is
+  // kept rather than dropped — so only the example needed replacing.
+  const result = c.setApiKey({ provider: 'cohere', key: 'sk-proj-something-0000' });
   assert.equal(result.active, false, 'no adapter exists for it');
-  assert.equal(c.apiKeys()[0].provider, 'openai', 'but it is kept, not silently dropped');
+  assert.equal(c.apiKeys()[0].provider, 'cohere', 'but it is kept, not silently dropped');
 });
 
 test('providerFromKey returns nothing for a vendor it does not know', () => {

@@ -15,6 +15,7 @@ import { anthropicProvider } from './intelligence/providers/anthropic.js';
 import { ollamaProvider } from './intelligence/providers/ollama.js';
 import { ollamaVisionProvider } from './intelligence/providers/ollama-vision.js';
 import { whisperProvider } from './intelligence/providers/whisper.js';
+import { openAiCompatibleProvider } from './intelligence/providers/openai-compatible.js';
 
 /**
  * @returns {{path: string, host: string, port: number, policy: object, providers: any[], notes: string[]}}
@@ -66,6 +67,28 @@ export function loadConfig(env = process.env) {
       })
     );
     notes.push(`Whisper provider registered at ${env.CHITRAQ_WHISPER}.`);
+  }
+
+  // Anything speaking the OpenAI chat shape — a hosted free tier, or
+  // llama.cpp/LM Studio/vLLM on this machine. Addressed rather than assumed,
+  // the same way Whisper is: there is no default port worth guessing, and a
+  // provider registered at an address nobody chose would be a surprise.
+  //
+  // A hosted one is normally added through `chitraq setup`, which stores the
+  // key encrypted. This path exists for a local server, which has no key to
+  // store, and for anyone who would rather configure by environment.
+  if (env.CHITRAQ_OPENAI_URL || env.CHITRAQ_OPENAI_PRESET) {
+    providers.push(
+      openAiCompatibleProvider({
+        preset: env.CHITRAQ_OPENAI_PRESET,
+        baseUrl: env.CHITRAQ_OPENAI_URL,
+        model: env.CHITRAQ_OPENAI_MODEL,
+        apiKey: env.CHITRAQ_OPENAI_KEY,
+      })
+    );
+    notes.push(
+      `OpenAI-compatible provider registered at ${env.CHITRAQ_OPENAI_URL ?? env.CHITRAQ_OPENAI_PRESET}.`
+    );
   }
 
   if (env.ANTHROPIC_API_KEY) {

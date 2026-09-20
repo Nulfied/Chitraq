@@ -19,7 +19,7 @@ account to create and no API bill.
 ```bash
 git clone https://github.com/Nulfied/Chitraq
 cd chitraq
-npm test                                     # 370 tests, no install step
+npm test                                     # 395 tests, no install step
 
 node scripts/seed.js demo/memory.chitraq     # build a demo memory
 node src/server/serve.js --db demo/memory.chitraq
@@ -258,11 +258,38 @@ deleted by sync.
 ## Using a model Chitraq does not run
 
 ```bash
-CHITRAQ_KEY=sk-ant-... chitraq keys --set anthropic
-chitraq keys
+chitraq setup
 ```
 
-Your key, your bill, your choice — Chitraq never pays for your tokens and never
+One command, run whenever you like. It looks for Ollama first — if you already
+have a local model, that may be the whole answer — and otherwise offers a list
+of hosted ones with the free tiers at the top:
+
+| | |
+|---|---|
+| **Groq, Google Gemini, Cerebras, GitHub Models** | free tiers |
+| **OpenRouter, Mistral, DeepSeek, OpenAI** | metered |
+| **Claude** | metered; the best of them |
+| **llama.cpp, LM Studio, vLLM** | on your machine, no key, nothing leaves |
+
+Everything except Claude goes through one adapter over plain `fetch`, because
+they all speak the same protocol. Adding a host is a line in a table, and any
+endpoint speaking that shape works whether or not it is listed:
+
+```bash
+CHITRAQ_OPENAI_URL=http://127.0.0.1:8080/v1     # anything local
+CHITRAQ_OPENAI_PRESET=groq CHITRAQ_OPENAI_KEY=… # or a known host
+```
+
+**Setup makes a real call before it stores anything.** You paste a key, it
+asks the model to summarise one sentence, and it shows you the reply. A key
+that does not work is never stored — you find out while you are looking at it,
+rather than three weeks later in the middle of an import. The default model
+names here will go stale as providers retire them; `--model` overrides any of
+them, and a retired name produces a plain error rather than a wrong answer.
+
+Model names and free tiers change. What does not is the shape: your key, your
+bill, your choice — Chitraq never pays for your tokens and never
 holds them. Keys are sealed with AES-256-GCM before they touch the database and
 are never handed back: the listing shows a mask, the HTTP API has no route that
 reads one, and the audit log records that a key changed, not what it is. Setting
@@ -270,7 +297,15 @@ one takes effect immediately, with no restart.
 
 The CLI refuses a key given as an argument, because an argument lands in your
 shell history and in the process list, where it outlives any care taken storing
-it.
+it. `chitraq setup` takes it as typed input that is never echoed; the
+non-interactive path reads `CHITRAQ_KEY`.
+
+To check a key still works later:
+
+```bash
+chitraq keys --test              # every stored key
+chitraq keys --test groq         # just one
+```
 
 By default this protects a leaked database, not a compromised machine — the
 secret sits in a file beside the store. If you want the stronger thing:
@@ -462,7 +497,7 @@ limit, and how to report something privately.
 npm test
 ```
 
-370 tests covering the invariants, not just the happy path: that AI cannot
+395 tests covering the invariants, not just the happy path: that AI cannot
 overwrite your edges, that a stale proposal is refused at accept time, that
 memory survives the total loss of every intelligence provider, that superseded
 pricing never appears as current, that two devices editing the same note raises
@@ -498,9 +533,9 @@ honest weaknesses section that is kept current rather than trimmed. Read it
 before depending on this for anything.
 
 The parts most worth knowing about: JBIG2-encoded scans cannot be read,
-concepts are the weakest entity kind, the Claude adapter is written but has
-never been run against the live API, and nothing has yet been used daily for a
-month by anybody.
+concepts are the weakest entity kind, the Anthropic SDK call has still never
+run against the live API (though the prompts it uses are exercised by every
+other provider), and nothing has yet been used daily for a month by anybody.
 
 `docs/INVARIANTS.md` lists the sixty rules the code is built to hold, each
 naming where it is enforced and the test that proves it. `docs/ARCHITECTURE.md`

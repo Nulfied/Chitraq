@@ -14,9 +14,11 @@ import { planFolder, skipSummary, DOCUMENT_EXTENSIONS } from '../capture/folder.
 import { isRemoteHost } from '../core/sync-http.js';
 import { Chitraq } from '../chitraq.js';
 import { loadConfig } from '../config.js';
+import { runSetup } from './setup.js';
 import { render } from '../context/builder.js';
 
 const COMMANDS = {
+  setup: { args: '', help: 'Choose an intelligence and check it works. Run this first.' },
   remember: { args: '<text...>', help: 'Capture a note. Use --title, --kind, --body.' },
   ingest: { args: '<file|folder|->', help: 'Capture a document, or every document in a folder.' },
   search: { args: '<query...>', help: 'Search memory. Supports kind:, after:, "phrases", -exclude.' },
@@ -103,6 +105,14 @@ async function run(command, rest, flags, c) {
   const joined = rest.join(' ');
 
   switch (command) {
+    case 'setup': {
+      // The path this instance actually opened, not the configured default —
+      // `--db` exists precisely so they can differ, and setup telling you
+      // about a memory it is not touching would be worse than saying nothing.
+      await runSetup(c, { path: flags.db ?? loadConfig().path });
+      break;
+    }
+
     case 'remember': {
       const title = flags.title ?? firstLine(joined);
       const body = flags.body ?? (flags.title ? joined : restOfText(joined));
@@ -295,6 +305,38 @@ async function run(command, rest, flags, c) {
       if (flags.remove) {
         const removed = c.removeApiKey({ provider: String(flags.remove) });
         console.log(`\n  removed the ${removed.provider} key\n`);
+        break;
+      }
+
+      if (flags.test) {
+        // Verifying a key already stored. The key never comes back out of the
+        // store, so this rebuilds the provider from it internally and makes a
+        // real call — the only way to know a credential still works.
+        const provider = flags.test === true ? null : String(flags.test);
+        const stored = c.apiKeys();
+        const targets = provider ? stored.filter((k) => k.provider === provider) : stored;
+
+        if (!targets.length) {
+          console.log(`
+  No stored key${provider ? ` for ${provider}` : ''}. Add one with: chitraq setup
+`);
+          process.exitCode = 1;
+          break;
+        }
+
+        console.log('');
+        for (const k of targets) {
+          process.stdout.write(`  ${k.provider.padEnd(12)} `);
+          const result = await c.verifyStoredKey(k.provider);
+          if (result.ok) {
+            console.log(`works — ${result.label}`);
+            console.log(`  ${''.padEnd(12)} it said: ${truncate(result.sample, 60)}`);
+          } else {
+            console.log(`FAILED — ${result.error}`);
+            process.exitCode = 1;
+          }
+        }
+        console.log('');
         break;
       }
 
