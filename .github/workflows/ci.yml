@@ -117,6 +117,20 @@ jobs:
             exit 1
           }
 
+      - name: API reference matches the routes
+        # docs/API.md is generated from the server's own route table. This
+        # fails when a route is added without a description, when a
+        # description outlives its route, or when the file was not
+        # regenerated — so the reference cannot quietly describe an API that
+        # is not the one being served.
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          node tools/api-reference.mjs --check || {
+            echo "::error::docs/API.md is out of date or a route is undocumented. Run: node tools/api-reference.mjs"
+            exit 1
+          }
+
       - name: Keep the output when it fails
         if: failure()
         uses: actions/upload-artifact@v4

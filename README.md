@@ -127,6 +127,17 @@ takes ownership of your memory.
 
 The CLI talks to the engine directly, so it works with no server running.
 
+Put `chitraq` on your PATH first — a clone has the command but nothing has
+linked it yet, and every example below assumes it is there:
+
+```bash
+npm link          # from the clone; `npm unlink -g chitraq` undoes it
+```
+
+If you would rather not link anything globally, `node src/cli/chitraq.js`
+takes exactly the same arguments and every example works with that in place
+of `chitraq`.
+
 ```bash
 chitraq remember "Chose SQLite because it needs no server"
 chitraq ingest notes/architecture.md      # also .pdf, .html, .csv, .json
@@ -136,6 +147,8 @@ chitraq search 'kind:decision sqlite after:2025-01'
 chitraq ask "why did we drop the redis cache"
 chitraq review                # proposals waiting for you
 chitraq show obj_01J...       # history, links, evidence, provenance
+
+chitraq status --db other.chitraq   # options go after the command, not before
 chitraq status                # what memory holds, what intelligence is available
 ```
 
@@ -309,6 +322,11 @@ that says the server is down, because you cannot tell a remembered fact from a
 remembered *response*. `ChitraqUnreachable` and `ChitraqError` are separate
 types so you can tell "nothing answered" from "it answered and said no".
 
+Every route is listed in [`docs/API.md`](docs/API.md) — all sixty-four of
+them, with the scope each one needs. That file is generated from the table
+the server dispatches on and checked in CI, so it cannot describe a route
+that does not exist or miss one that does.
+
 ### What a token is actually for
 
 On one machine a token cannot make access harder to obtain — anything running
@@ -425,13 +443,16 @@ src/capture/       parsers (text, markdown, html, csv, json, pdf) and ingestion
 src/server/        HTTP API
 src/cli/           command line
 web/               browser interface
-docs/              architecture, invariants, and an honest status ledger
+docs/              architecture, invariants, HTTP reference, status ledger
 ```
 
 Start with [`docs/INVARIANTS.md`](docs/INVARIANTS.md) — it lists the rules the
 system is built to hold and points at the test that proves each one.
 [`docs/STATUS.md`](docs/STATUS.md) says plainly what is implemented, what is
-partial, and what is designed but not built.
+partial, and what is designed but not built. [`docs/API.md`](docs/API.md) is
+the HTTP reference, generated from the routes themselves.
+[`SECURITY.md`](SECURITY.md) says what is in scope, what is a deliberate
+limit, and how to report something privately.
 
 ---
 

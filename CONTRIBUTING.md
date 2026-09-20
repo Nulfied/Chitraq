@@ -88,7 +88,13 @@ build, ask about a commercial licence rather than working around it.
 For a bug, the most useful report says what you expected, what happened, and
 the smallest thing that reproduces it. `chitraq status` output helps.
 
-For a security issue, please do not open a public issue. The parts most worth
-looking at are `src/core/keys.js`, `src/core/vault.js`, `src/core/tokens.js`
-and `src/core/auth.js`, each of which documents what it does and does not
-defend against.
+For a security issue, please do not open a public issue — use [private
+vulnerability reporting](https://github.com/Nulfied/Chitraq/security/advisories/new),
+and see [SECURITY.md](SECURITY.md) for what is in scope, what is a known
+and deliberate limit, and what to expect afterwards. This paragraph used to
+say "not a public issue" without saying where to go instead, which is most
+of the way to saying nothing.
+
+The parts most worth looking at are `src/core/keys.js`, `src/core/vault.js`,
+`src/core/tokens.js` and `src/core/auth.js`, each of which documents what it
+does and does not defend against.

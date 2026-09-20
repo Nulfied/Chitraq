@@ -462,6 +462,15 @@ export function createApp(chitraq, opts = {}) {
     return serveStatic(res, webRoot, url.pathname);
   });
 
+  // The route table, for anything that needs to know what this serves rather
+  // than to call it. `tools/api-reference.mjs` builds docs/API.md from it, so
+  // the reference is the same list the server dispatches on: it cannot
+  // describe a route that does not exist, or miss one that does.
+  Object.defineProperty(server, 'routes', {
+    value: routes.map(({ method, path, scope }) => ({ method, path, scope })),
+    enumerable: false,
+  });
+
   return server;
 }
 
