@@ -428,6 +428,18 @@ function typeOfCapitalisedRun(value) {
  * Short and specific on purpose. Each of these actually appeared as the last
  * word of a fabricated "person" in the first real corpus.
  */
+/**
+ * Words that begin a heading, never somebody's first name. Imperatives and
+ * question words, both of which start a great many section titles.
+ */
+const NOT_A_FIRST_NAME = new Set([
+  'why', 'what', 'when', 'where', 'how', 'who', 'which', 'whether',
+  'requires', 'require', 'start', 'starting', 'using', 'use', 'adding', 'add',
+  'building', 'build', 'running', 'run', 'getting', 'get', 'writing', 'write',
+  'installing', 'install', 'testing', 'test', 'making', 'make', 'setting',
+  'reading', 'read', 'choosing', 'choose', 'status', 'note', 'warning',
+]);
+
 const NOT_A_SURNAME = new Set([
   'rules', 'proposal', 'server', 'model', 'project', 'design', 'specification',
   'objects', 'structure', 'interpolation', 'resolutions', 'reference', 'guide',
@@ -453,6 +465,9 @@ function looksLikePersonName(value) {
   const words = value.split(/[ \t]+/);
   if (words.length < 2 || words.length > 3) return false;
   if (/[&]|\b(and|of|the|for|with|in|on)\b/i.test(value)) return false;
+  // A name does not begin with a verb or a question word. Headings do:
+  // "Requires Node", "Start Jupyter", "Why Halka", "Status What".
+  if (NOT_A_FIRST_NAME.has(words[0].toLowerCase())) return false;
   if (NOT_A_SURNAME.has(words[words.length - 1].toLowerCase())) return false;
 
   // Each word is either a proper word or an initial — "Priya R Rao" is a name

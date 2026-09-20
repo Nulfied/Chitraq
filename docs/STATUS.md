@@ -5,7 +5,7 @@ What is actually built, what is partial, and what is deliberately not built.
 States: **IMPLEMENTED** (built and tested), **PARTIAL** (works, with a stated
 limit), **NOT BUILT** (deliberately deferred).
 
-Last updated: 2026-09-19. 326 tests passing.
+Last updated: 2026-09-20. 333 tests passing.
 
 ---
 
@@ -333,13 +333,23 @@ says otherwise.
 5. **Nothing watches anything unless you start it.** `chitraq watch` is a
    foreground command that dies with the terminal. Sync has no watch mode at
    all, and there is still no timer, no service and no background exchange.
-6. **Concepts are the weakest entity kind.** They are found by recurrence
+6. **Entity extraction is weak on technical documentation.** Measured on a
+   real corpus of 27 project documents (460 objects): the first run produced
+   33 entities of which about four were real, because documentation is nothing
+   but Title Case and every capitalised run was read as a person. After
+   tightening — a name must be a positive shape, and articles, determiners,
+   conjunctions, verbs and question words disqualify one — it produces 8, of
+   which 4 are right, 1 is real but mistyped (`Sublime Text` as a person), and
+   3 are common nouns the product pattern caught (`Rules`, `Gate`,
+   `Provenance`). Better, still not good. Prose about people works far better
+   than documentation does; a model would do this properly.
+7. **Concepts are the weakest entity kind.** They are found by recurrence
    across separate notes, which is honest but shallow: it finds phrases you
    repeat, not ideas you hold. Everything it produces is a proposal, and
    confidence is capped well below the shape-based kinds.
-7. **Fax-encoded scans still cannot be read.** `CCITTFaxDecode` and
+8. **Fax-encoded scans still cannot be read.** `CCITTFaxDecode` and
    `JBIG2Decode` need real decoders. Detected and named, never guessed at.
-8. **An unlocked vault lives in process memory.** Something that can read this
+9. **An unlocked vault lives in process memory.** Something that can read this
    process can read the data key. Defending against that is a different order
    of problem and is not attempted.
-9. **Video is captured but not read.** Nothing extracts its audio track.
+10. **Video is captured but not read.** Nothing extracts its audio track.

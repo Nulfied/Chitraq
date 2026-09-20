@@ -139,3 +139,49 @@ test('places and products become linked entities, end to end', async (t) => {
   assert.equal(types.Postgres, 'product');
   assert.equal(types.Atlas, 'project');
 });
+
+// The shapes below all came out of one real corpus of 27 technical documents,
+// which produced 33 entities of which about four were real. Documentation is
+// nothing but Title Case, and the old rule read every capitalised run as a
+// person.
+
+test('a heading is not a person', () => {
+  for (const heading of [
+    'Global Rules apply to every file.',
+    'Halka Enhancement Proposal was filed.',
+    'Grammar Resolutions are listed below.',
+    'Halka Memory Model is documented here.',
+    'Locked Syntax Specification covers this.',
+  ]) {
+    const people = entities(heading).filter((e) => e.type === 'name');
+    assert.deepEqual(people, [], `"${heading}" invented ${people.map((p) => p.text)}`);
+  }
+});
+
+test('a name does not begin with a verb or a question word', () => {
+  for (const heading of ['Why Halka exists.', 'Start Jupyter now.', 'Requires Node 24.']) {
+    assert.deepEqual(entities(heading).filter((e) => e.type === 'name'), []);
+  }
+});
+
+test('a conjunction means it is a title, not a person', () => {
+  for (const t of ['Strings & Interpolation work.', 'Halka and C interoperate.']) {
+    assert.deepEqual(entities(t).filter((e) => e.type === 'name'), []);
+  }
+});
+
+test('an article is never the name of anything', () => {
+  // "the billing API" produced a product called "The"; "All API calls" one
+  // called "All". Cue patterns were skipping the cleaning the sweep did.
+  for (const t of ['The billing API is ready.', 'All API calls are logged.', 'A SDK exists.']) {
+    assert.deepEqual(entities(t), [], `"${t}" produced something`);
+  }
+});
+
+test('real people still resolve, initials and all', () => {
+  assert.ok(entities('Priya Sharma approved it.').some((e) => e.type === 'name' && e.text === 'Priya Sharma'));
+  // The first version of the person rule rejected this one.
+  assert.ok(entities('Priya R Rao led it.').some((e) => e.type === 'name' && e.text === 'Priya R Rao'));
+  // But two bare initials are nobody.
+  assert.deepEqual(entities('A B arrived.').filter((e) => e.type === 'name'), []);
+});
