@@ -331,8 +331,13 @@ says otherwise.
 - **CRDT-style automatic merge.** Sync raises divergence for a human instead.
   This is a choice, not a gap: automatic merge means silently discarding one
   side of an edit.
-- **OCR, speech and vision providers.** The capability slots exist; no provider
-  is registered, and coverage says so.
+- **A hosted OCR, speech or vision service.** All three capabilities are
+  served, but only by something running on your own machine: `ocr.image` and
+  `describe.image` by a vision model through Ollama, `ocr.document` by a
+  provider that takes the PDF apart and delegates each page to whichever of
+  those is registered, `transcribe` by any local Whisper server. Sending
+  documents to somebody else's API to read them is the thing this project is
+  arranged to avoid, so no adapter for one is written.
 - **Multi-user real-time collaboration.** Permissions and sync exist; presence,
   live cursors and operational transforms do not.
 - **JBIG2-encoded scans** (`JBIG2Decode`). CCITT Group 3 and Group 4 are now
