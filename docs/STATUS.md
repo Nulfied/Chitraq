@@ -5,7 +5,7 @@ What is actually built, what is partial, and what is deliberately not built.
 States: **IMPLEMENTED** (built and tested), **PARTIAL** (works, with a stated
 limit), **NOT BUILT** (deliberately deferred).
 
-Last updated: 2026-09-20. 345 tests passing.
+Last updated: 2026-09-20. 346 tests passing.
 
 ---
 
@@ -323,9 +323,13 @@ says otherwise.
 1. **The built-in embedder is lexical, not semantic.** It will not connect "car"
    to "automobile". It scores itself 0.35 so any real model outranks it.
    Installing Ollama is the single biggest retrieval improvement available.
-2. **A local 3B model is too slow for bulk extraction on modest hardware.**
-   Measured here, llama3.2 needs about **86 seconds for a 1,000-character
-   passage** — roughly five tokens a second, warm, with the model resident.
+2. **A local 3B model is slow for bulk extraction on modest hardware.**
+   Throughput here is a fixed **five tokens a second**, so the schema decides
+   the cost: asking for kind, epistemic and confidence per claim made the
+   model emit 251 tokens where 45 would do — 69 seconds against 9. It is now
+   asked only for the sentences, which cut a representative extraction from
+   70 seconds to 26. It is still slow. Measured before that change,
+   llama3.2 needed about **86 seconds for a 1,000-character passage** — roughly five tokens a second, warm, with the model resident.
    Documents are now read in pieces, which fixes the context limit and does
    nothing for throughput: a 31-piece document would be three quarters of an
    hour. So Chitraq estimates the cost from this machine's own run history
@@ -340,12 +344,13 @@ says otherwise.
    model would have. Falling back is now reported rather than silent. Chunked
    extraction, so the model sees pieces it can handle, is the fix and is not
    built: it would be roughly ten minutes per large document on this hardware.
-4. **Confidence from a small local model is not a review filter.** On a real
-   import, 402 of 460 proposals came back at exactly 0.4 — llama3.2 emitting
-   a default rather than judging. A threshold over that sorts nothing, so
-   Chitraq now measures the distribution and says so instead of offering a
-   control that does nothing. Review by source is the workable path until a
-   model that discriminates is available.
+4. **Confidence is derived, not asked for.** A real import produced 402 of
+   460 proposals at exactly 0.4: llama3.2 emitting a default rather than
+   judging. Rather than trusting it, the model is now asked only for the
+   claim sentences and the labels come from the deterministic classifier —
+   which both varies and costs nothing. Chitraq still measures the
+   distribution and says plainly when it is flat, because a threshold over
+   one repeated value sorts nothing.
 5. **Contradiction detection is narrow.** Conflicting figures about the same
    subject, and negated restatements. It misses most real contradictions, and
    is tuned for precision because a false "these disagree" is expensive to

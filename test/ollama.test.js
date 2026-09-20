@@ -467,3 +467,43 @@ test('a model too slow for the job is skipped, not discovered by timing out', as
   assert.match(result.skippedModel.reason, /too slow/);
   assert.ok(result.proposals.length > 20, 'the floor still did the work');
 });
+
+test('the model is asked for sentences, and the labels are derived', async (t) => {
+  // Generation runs at about five tokens a second here whatever is asked
+  // for, so the schema decides the cost. Demanding kind, epistemic and
+  // confidence per claim made the model emit 251 tokens where 45 would do —
+  // 69 seconds against 9 — and the confidence it returned was the same
+  // constant every time, which is no signal at all.
+  const stand = await fakeOllama({
+    handler: (req, body, reply) => {
+      if (req.url !== '/api/generate') return false;
+      reply(200, {
+        response: JSON.stringify({
+          claims: [
+            'We decided to keep the engine dependency-free.',
+            'We measured p99 latency at 38ms across 14000 chunks.',
+            'It might not hold above ten million chunks.',
+          ],
+        }),
+      });
+      return true;
+    },
+  });
+  t.after(() => stand.close());
+
+  const p = ollamaProvider({ baseUrl: stand.baseUrl });
+  const result = await p.capabilities[Capability.ExtractClaims].run({ text: 'irrelevant', limit: 20 });
+
+  // Plain strings in, labelled claims out.
+  assert.equal(result.claims.length, 3);
+  const byKind = Object.fromEntries(result.claims.map((c) => [c.kind, c.confidence]));
+  assert.ok('decision' in byKind, `derived a decision, got ${Object.keys(byKind)}`);
+  assert.ok('hypothesis' in byKind, 'and a hypothesis');
+
+  // The whole point: confidence varies, so a threshold can sort them.
+  assert.ok(new Set(result.claims.map((c) => c.confidence)).size > 1, 'confidence is not a constant');
+
+  // And the request really did ask for the cheap shape.
+  const sent = stand.seen.find((r) => r.path === '/api/generate').body;
+  assert.equal(sent.format.properties.claims.items.type, 'string', 'strings, not objects');
+});

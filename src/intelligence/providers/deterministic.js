@@ -632,7 +632,7 @@ const CUES = [
  * @param {string} sentence
  * @param {boolean} isQuestion
  */
-function classifySentence(sentence, isQuestion) {
+export function classifySentence(sentence, isQuestion) {
   if (isQuestion) return { kind: 'question', epistemic: 'belief', confidence: 0.75 };
   for (const cue of CUES) {
     if (cue.re.test(sentence)) {

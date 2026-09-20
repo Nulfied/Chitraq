@@ -17,6 +17,7 @@
  */
 
 import { Capability } from '../registry.js';
+import { classifySentence } from './deterministic.js';
 
 /**
  * @param {object} [opts]
@@ -190,38 +191,41 @@ export function ollamaProvider(opts = {}) {
         latencyMs: 30_000,
         costMicros: 0,
         run: async (task) => {
+          // Ask only for the sentences, and derive the rest.
+          //
+          // Generation here runs at about five tokens a second whatever is
+          // asked for, so the schema decides the cost. Demanding kind,
+          // epistemic and confidence for every claim made the model emit 251
+          // tokens where 45 would do — 69 seconds against 9 — and the
+          // confidence it produced was the same constant every time, which
+          // is no signal at all.
+          //
+          // So the model does the one part it is genuinely better at,
+          // finding where a claim starts and stops, and the deterministic
+          // classifier labels them from the same surface cues it always has.
           const result = await askJson({
             system: LOCAL_EXTRACT_SYSTEM,
             prompt: `Title: ${task.title ?? '(untitled)'}\n\n${task.text}`,
             schema: {
               type: 'object',
               required: ['claims'],
-              properties: {
-                claims: {
-                  type: 'array',
-                  items: {
-                    type: 'object',
-                    required: ['text', 'kind', 'epistemic', 'confidence'],
-                    properties: {
-                      text: { type: 'string' },
-                      kind: { type: 'string' },
-                      epistemic: { type: 'string' },
-                      confidence: { type: 'number' },
-                    },
-                  },
-                },
-              },
+              properties: { claims: { type: 'array', items: { type: 'string' } } },
             },
           });
+
           return {
-            claims: (result.claims ?? []).slice(0, task.limit ?? 20).map((c) => ({
-              text: String(c.text ?? '').trim(),
-              kind: KINDS.has(c.kind) ? c.kind : 'note',
-              epistemic: EPISTEMICS.has(c.epistemic) ? c.epistemic : 'observation',
-              confidence: clamp(c.confidence) ?? 0.5,
-              offset: 0,
-            })).filter((c) => c.text.length > 10),
-            uncertainty: 'Extracted by a local model; review before relying on these.',
+            claims: (result.claims ?? [])
+              .map((c) => String(typeof c === 'string' ? c : (c?.text ?? '')).trim())
+              .filter((text) => text.length > 10)
+              .slice(0, task.limit ?? 20)
+              .map((text) => ({
+                text,
+                ...classifySentence(text, /\?\s*$/.test(text)),
+                offset: 0,
+              })),
+            uncertainty:
+              'Sentences chosen by a local model, labelled by surface cues. ' +
+              'Review before relying on these.',
           };
         },
       },
@@ -270,7 +274,7 @@ Never use knowledge from outside the material. Never guess. Write ids exactly as
 
 const LOCAL_EXTRACT_SYSTEM = `Split the text into separate pieces of knowledge worth remembering.
 
-Each piece must make sense on its own and must say only what the text says. Mark something measured as an observation, something settled as a decision, something uncertain as a hypothesis. Skip filler. If there is nothing worth keeping, return an empty list.`;
+Return each piece as one plain sentence. Each must make sense on its own and must say only what the text says — do not summarise, do not combine two points into one, do not add anything. Prefer the wording already there. Skip headings, table rows, navigation and filler. If there is nothing worth keeping, return an empty list.`;
 
 /** @param {unknown} n */
 function clamp(n) {
