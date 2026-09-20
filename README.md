@@ -209,9 +209,15 @@ CamScanner, Microsoft Lens, the camera on a phone — writes JPEG inside the
 PDF, and those bytes are already a complete image. Chitraq takes the file
 apart and reads each page with whatever reads images.
 
-Fax-encoded scans (`CCITTFaxDecode`) are the exception, and deliberately so:
-that is fax machines and old office copiers, not anything a scanner app
-produces today. They are named as unreadable rather than guessed at.
+Fax-encoded pages (`CCITTFaxDecode`, Group 3 and Group 4) are decoded too,
+from the T.4 and T.6 tables, with no dependency. Almost nothing produces them
+any more — that is fax machines and old office copiers — but a decoder is only
+worth shipping if it can be shown to be right, so every fixture in the test
+suite was encoded by libtiff and is asserted back pixel for pixel, and the
+decoder was fuzzed against it over several thousand random pages.
+
+`JBIG2Decode` is the one encoding left. It is named as unreadable rather than
+guessed at, because there is no independent encoder to check it against.
 
 ---
 
@@ -470,10 +476,10 @@ tests; `docs/STATUS.md` lists what is implemented, what is partial, and an
 honest weaknesses section that is kept current rather than trimmed. Read it
 before depending on this for anything.
 
-The parts most worth knowing about: fax-encoded scans cannot be read, concepts
-are the weakest entity kind, the Claude adapter is written but has never been
-run against the live API, and nothing has yet been used daily for a month by
-anybody.
+The parts most worth knowing about: JBIG2-encoded scans cannot be read,
+concepts are the weakest entity kind, the Claude adapter is written but has
+never been run against the live API, and nothing has yet been used daily for a
+month by anybody.
 
 `docs/INVARIANTS.md` lists the sixty rules the code is built to hold, each
 naming where it is enforced and the test that proves it. `docs/ARCHITECTURE.md`

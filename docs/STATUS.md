@@ -194,7 +194,7 @@ reported on the Status screen; not automatic.
 | Text, Markdown, HTML, JSON, CSV | IMPLEMENTED | Front matter, headings, links, wikilinks |
 | **Folder capture** | IMPLEMENTED | Resumable, idempotent, skips machinery, states a reason for every omission |
 | **PDF** | IMPLEMENTED | Dependency-free: inflates content streams, reads text operators, extracts document info |
-| **Scanned PDF** | IMPLEMENTED | Page images extracted and read. Fax-encoded scans (CCITT, JBIG2) named as unreadable |
+| **Scanned PDF** | IMPLEMENTED | Page images extracted and read, including CCITT Group 3/4 fax. JBIG2 named as unreadable |
 | Encrypted PDF | PARTIAL | Detected and reported; file still captured verbatim |
 | **Images** | IMPLEMENTED | Read by a local vision model through Ollama; captured verbatim with an honest note when none is present |
 | **Audio** | IMPLEMENTED | Read by any local Whisper server; timestamps kept as evidence locators |
@@ -246,11 +246,29 @@ So `ocr.document` is served by a provider that knows nothing about models: it
 takes the file apart and asks whatever serves `ocr.image` to read each page.
 Verified end to end against moondream.
 
-**What remains true:** `CCITTFaxDecode` and `JBIG2Decode`, the bilevel fax
-encodings a photocopier produces, need real decoders. Those are named in the
-result. So are colour spaces that would need converting and bitmaps with a
-predictor — a wrong picture that looks like a picture is worse than none,
-because a model will read it and produce confident text from nothing.
+`CCITTFaxDecode` — Group 3 and Group 4, what a fax machine and an old copier
+produce — was the last gap and is now decoded from the T.4 and T.6 tables.
+The reason to write it rather than keep naming it was that it can be checked:
+Pillow carries libtiff's encoder, so a known bitmap goes in and the decoder's
+output is compared pixel for pixel against it. Twelve committed fixtures cover
+hairlines, ink against both margins, runs past 2560 pixels and a width that is
+not a multiple of eight. A fuzz run over several thousand random pages found
+no difference, and it is reproducible rather than reported:
+
+```
+python tools/make-ccitt-fixtures.py --fuzz 1000 7
+node tools/fuzz-ccitt.mjs .ccitt-fuzz
+```
+
+Pillow is a development tool for those two scripts. It is not imported by
+anything in `src/`, is not in `package.json`, and the fixtures are committed,
+so the test suite and CI run without it. The zero-dependency claim holds.
+
+**What remains true:** `JBIG2Decode` needs a decoder, and there is no
+independent encoder to check one against, so it is named in the result rather
+than attempted. So are colour spaces that would need converting and bitmaps
+with a predictor — a wrong picture that looks like a picture is worse than
+none, because a model will read it and produce confident text from nothing.
 
 Two bugs in the existing parser fell out of this work, both long-standing:
 `endstream` ends in `stream`, so every stream was found twice; and the
@@ -317,13 +335,12 @@ says otherwise.
   is registered, and coverage says so.
 - **Multi-user real-time collaboration.** Permissions and sync exist; presence,
   live cursors and operational transforms do not.
-- **Fax-encoded scans** (`CCITTFaxDecode`, `JBIG2Decode`). Every scanner app
-  people actually use — Adobe Scan, CamScanner, Microsoft Lens, the camera on
-  a phone — writes JPEG inside the PDF, and that path works: the page comes
-  out byte-for-byte and goes to a vision model. CCITT is fax machines and old
-  office copiers. Writing a decoder for it would also mean shipping one
-  nobody could verify without a real sample, and a subtly wrong decoder feeds
-  a vision model a scrambled page it will read confidently. Detected and
+- **JBIG2-encoded scans** (`JBIG2Decode`). CCITT Group 3 and Group 4 are now
+  decoded — see below — but JBIG2 is a different size of problem: arithmetic
+  coding, symbol dictionaries and generic region decoding, a subsystem rather
+  than a table. The deciding factor is not difficulty, it is that there is no
+  independent encoder to check a decoder against, and an unverifiable decoder
+  hands a vision model a scrambled page it will read confidently. Detected and
   named instead.
 
 ## Honest weaknesses

@@ -15,13 +15,17 @@
  * one used, because the difference between them is quality and size, not
  * interface, and demanding one specific name means most machines get nothing.
  *
- * **What this deliberately does not serve: `ocr.document`.** A scanned PDF holds
- * pages as embedded images, and getting them out means rasterising or decoding
- * JPEG/JBIG2/CCITT streams. Every route to that is a dependency, and Chitraq has
- * none. So a scanned PDF is still captured verbatim and still reported as
- * unreadable. Pretending otherwise — running the raw stream through a vision
- * model and hoping — would produce confident nonsense, which is worse than the
- * honest gap.
+ * **What this deliberately does not serve: `ocr.document`.** A scanned PDF is
+ * pages of embedded images, and taking one apart is a separate job from
+ * reading a picture. `pdf-ocr.js` does that job — it pulls each page out with
+ * `extractPdfImages` and hands it to whatever serves `ocr.image`, which is
+ * usually this. Keeping the two apart means the page extractor can be tested
+ * against known bytes without a model anywhere near it, and this provider
+ * stays a thing that reads one picture.
+ *
+ * What it will not do is run a raw compressed stream through a vision model
+ * and hope. That produces confident nonsense, which is worse than an honest
+ * gap — so a page in an encoding nothing here can decode is reported by name.
  *
  * **What comes out of here is a reading, not the document's own words.** A model
  * that misreads "38ms" as "88ms" produces text indistinguishable from a quote.

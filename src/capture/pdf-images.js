@@ -13,16 +13,20 @@
  * images the bytes are a raw bitmap, and Node's zlib is already here, so
  * wrapping one in a PNG is arithmetic rather than a library.
  *
- * What genuinely cannot be done here is `CCITTFaxDecode` and `JBIG2Decode` —
- * the bilevel fax encodings a photocopier produces. Those need real decoders.
- * They are reported by name, not guessed at.
+ * `CCITTFaxDecode` — the bilevel encoding a fax machine and an old copier
+ * produce — needs a real decoder, and `ccitt.js` is one, checked against
+ * libtiff's encoder rather than against itself.
  *
- * So the honest position is narrower and more useful than the old one: most
- * scanned PDFs can be read, some cannot, and this says which.
+ * That leaves `JBIG2Decode`, which is a subsystem rather than a table and has
+ * no oracle to check against. It is reported by name, not guessed at.
+ *
+ * So the honest position is narrow: nearly every scanned PDF can be read, one
+ * encoding cannot, and this says which.
  */
 
 import { inflateSync, deflateSync } from 'node:zlib';
 import { dictBefore } from './pdf.js';
+import { decodeCcitt } from './ccitt.js';
 
 /**
  * @typedef {object} ExtractedImage
@@ -112,10 +116,23 @@ export function extractPdfImages(bytes, opts = {}) {
       continue;
     }
 
-    if (filter === 'CCITTFaxDecode' || filter === 'JBIG2Decode') {
+    if (filter === 'CCITTFaxDecode') {
+      const png = fromFax(data, dict, width, height);
+      if (png) images.push({ data: png, mediaType: 'image/png', width, height, index });
+      else {
+        unreadable.push({
+          filter,
+          reason: 'CCITT stream could not be decoded; the page is reported rather than guessed at.',
+        });
+      }
+      continue;
+    }
+
+    if (filter === 'JBIG2Decode') {
       unreadable.push({
         filter,
-        reason: `${filter} is a bilevel fax encoding and needs a decoder Chitraq does not have.`,
+        reason:
+          'JBIG2Decode is a bilevel encoding that needs a decoder Chitraq does not have.',
       });
       continue;
     }
@@ -136,6 +153,104 @@ export function extractPdfImages(bytes, opts = {}) {
   }
 
   return { images, unreadable };
+}
+
+/**
+ * Decode a fax-encoded page and wrap it in a PNG.
+ *
+ * The decoder returns exactly what a one-bit DeviceGray image already is —
+ * rows of pixels, a set bit meaning white, padded to a byte — so there is no
+ * conversion step between the two, only the container.
+ *
+ * Anything that does not line up returns null and is reported. A CCITT stream
+ * whose declared column count disagrees with the image width would decode
+ * into rows of the wrong length and come out as a sheared page, which is the
+ * exact failure this file exists to avoid.
+ *
+ * @param {Buffer} data
+ * @param {string} dict
+ * @param {number} width
+ * @param {number} height
+ * @returns {Buffer|null}
+ */
+function fromFax(data, dict, width, height) {
+  const parms = subDictionary(dict, 'DecodeParms') ?? '';
+
+  // Columns defaults to 1728 in the specification, which is a fax page. When
+  // a producer leaves it out on an image of some other width it meant the
+  // width, so that is what is used — but a value that is present and
+  // disagrees is a real inconsistency, not something to paper over.
+  const declared = num(parms, 'Columns');
+  const columns = declared ?? width;
+  if (columns !== width) return null;
+
+  try {
+    const pixels = decodeCcitt(data, {
+      columns,
+      rows: num(parms, 'Rows') ?? height,
+      k: signed(parms, 'K') ?? 0,
+      blackIs1: flag(parms, 'BlackIs1') === true,
+      byteAlign: flag(parms, 'EncodedByteAlign') === true,
+    });
+
+    // /Decode [1 0] on a one-bit image means the samples are stored the other
+    // way round. Applying it here keeps the PNG honest about which end is ink.
+    const inverted = /\/Decode\s*\[\s*1\s+0\s*\]/.test(dict)
+      ? Buffer.from(pixels.map((b) => ~b & 0xff))
+      : pixels;
+
+    return toPng(inverted, '/ColorSpace /DeviceGray /BitsPerComponent 1', width, height);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The text of a dictionary nested inside another one.
+ *
+ * Walks forward balancing `<<` and `>>` rather than matching to the first
+ * `>>`, because the first one may close something deeper.
+ *
+ * @param {string} dict
+ * @param {string} key
+ * @returns {string|null}
+ */
+function subDictionary(dict, key) {
+  const at = dict.indexOf(`/${key}`);
+  if (at < 0) return null;
+  const open = dict.indexOf('<<', at);
+  if (open < 0) return null;
+
+  let depth = 0;
+  for (let i = open; i < dict.length - 1; i++) {
+    if (dict[i] === '<' && dict[i + 1] === '<') {
+      depth++;
+      i++;
+    } else if (dict[i] === '>' && dict[i + 1] === '>') {
+      depth--;
+      i++;
+      if (depth === 0) return dict.slice(open, i + 1);
+    }
+  }
+  return null;
+}
+
+/**
+ * @param {string} dict
+ * @param {string} key
+ */
+function signed(dict, key) {
+  const found = new RegExp(String.raw`/${key}\s+(-?\d+)`).exec(dict);
+  return found ? Number(found[1]) : null;
+}
+
+/**
+ * @param {string} dict
+ * @param {string} key
+ */
+function flag(dict, key) {
+  const found = new RegExp(String.raw`/${key}\s+(true|false)`).exec(dict);
+  return found ? found[1] === 'true' : null;
 }
 
 /**

@@ -1,0 +1,98 @@
+[
+  {
+    "name": "text.group4",
+    "width": 400,
+    "height": 120,
+    "k": -1,
+    "encodedBytes": 568,
+    "rawBytes": 6000
+  },
+  {
+    "name": "text.group3",
+    "width": 400,
+    "height": 120,
+    "k": 0,
+    "encodedBytes": 948,
+    "rawBytes": 6000
+  },
+  {
+    "name": "rects.group4",
+    "width": 600,
+    "height": 400,
+    "k": -1,
+    "encodedBytes": 740,
+    "rawBytes": 30000
+  },
+  {
+    "name": "rects.group3",
+    "width": 600,
+    "height": 400,
+    "k": 0,
+    "encodedBytes": 4081,
+    "rawBytes": 30000
+  },
+  {
+    "name": "all-white.group4",
+    "width": 200,
+    "height": 50,
+    "k": -1,
+    "encodedBytes": 10,
+    "rawBytes": 1250
+  },
+  {
+    "name": "all-black.group4",
+    "width": 200,
+    "height": 50,
+    "k": -1,
+    "encodedBytes": 19,
+    "rawBytes": 1250
+  },
+  {
+    "name": "hairlines.group4",
+    "width": 300,
+    "height": 200,
+    "k": -1,
+    "encodedBytes": 3207,
+    "rawBytes": 7600
+  },
+  {
+    "name": "hairlines.group3",
+    "width": 300,
+    "height": 200,
+    "k": 0,
+    "encodedBytes": 7368,
+    "rawBytes": 7600
+  },
+  {
+    "name": "edges.group4",
+    "width": 128,
+    "height": 64,
+    "k": -1,
+    "encodedBytes": 46,
+    "rawBytes": 1024
+  },
+  {
+    "name": "long-runs.group4",
+    "width": 4000,
+    "height": 30,
+    "k": -1,
+    "encodedBytes": 19,
+    "rawBytes": 15000
+  },
+  {
+    "name": "noise.group4",
+    "width": 256,
+    "height": 128,
+    "k": -1,
+    "encodedBytes": 8620,
+    "rawBytes": 4096
+  },
+  {
+    "name": "noise.group3",
+    "width": 256,
+    "height": 128,
+    "k": 0,
+    "encodedBytes": 8009,
+    "rawBytes": 4096
+  }
+]

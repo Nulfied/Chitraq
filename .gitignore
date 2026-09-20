@@ -9,3 +9,6 @@ data/
 .env.*
 !.env.example
 test-output.txt
+
+# Throwaway CCITT fuzz corpus (tools/make-ccitt-fixtures.py --fuzz)
+.ccitt-fuzz/

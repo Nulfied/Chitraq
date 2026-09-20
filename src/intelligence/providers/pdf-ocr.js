@@ -12,8 +12,9 @@
  *
  * Two honest limits it carries rather than hides:
  *
- *   - Fax-encoded scans (`CCITTFaxDecode`, `JBIG2Decode`) cannot be extracted at
- *     all, and are named in the result instead of quietly dropped.
+ *   - JBIG2-encoded pages (`JBIG2Decode`) cannot be extracted at all, and are
+ *     named in the result instead of quietly dropped. CCITT fax pages used to
+ *     be in the same sentence and are now decoded.
  *   - Pages come out in file order, which is usually page order and is not
  *     guaranteed to be. A twenty-page contract read out of sequence is still
  *     readable; a twenty-page contract silently missing page nine is not, so
@@ -97,7 +98,7 @@ export function pdfOcrProvider(opts) {
             uncertainty:
               `Read from ${pages.length} page image(s) of ${images.length} found` +
               (unreadable.length
-                ? `, with ${unreadable.length} more in a fax encoding that cannot be extracted. `
+                ? `, with ${unreadable.length} more in an encoding that cannot be extracted. `
                 : '. ') +
               'This is a model reading pictures of text, twice removed from what was typed. ' +
               'Page order follows the file rather than the document, and numbers are where it fails.',

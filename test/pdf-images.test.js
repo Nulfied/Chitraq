@@ -7,6 +7,11 @@
  * ones: a `DCTDecode` stream *is* a JPEG, and a `FlateDecode` bitmap only needs
  * a PNG header wrapped round it, which is arithmetic.
  *
+ * Fax-encoded scans were the last gap and are now decoded too, by `ccitt.js`.
+ * What that decoder gets right is checked against libtiff in `ccitt.test.js`;
+ * what is checked here is only the wiring — that the parameters in the PDF
+ * dictionary reach it, and that a page which cannot be trusted is refused.
+ *
  * So most of these tests are about the boundary — what comes out, what is
  * refused, and whether the refusals say which is which.
  */
@@ -14,7 +19,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { deflateSync } from 'node:zlib';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { deflateSync, inflateSync } from 'node:zlib';
 
 import { extractPdfImages } from '../src/capture/pdf-images.js';
 import { extractPdfText } from '../src/capture/pdf.js';
@@ -92,17 +100,92 @@ test('a raw bitmap comes out as a valid PNG', () => {
   assert.equal(images[0].data.subarray(12, 16).toString('latin1'), 'IHDR');
 });
 
-test('fax-encoded scans are named, not guessed at', () => {
-  for (const filter of ['CCITTFaxDecode', 'JBIG2Decode']) {
-    const pdf = pdfWithImage({
-      dict: `<< /Type /XObject /Subtype /Image /Width 200 /Height 200 /Filter /${filter}`,
-      data: Buffer.alloc(2000, 0x01),
-    });
-    const { images, unreadable } = extractPdfImages(pdf);
-    assert.equal(images.length, 0);
-    assert.equal(unreadable[0].filter, filter);
-    assert.match(unreadable[0].reason, /decoder Chitraq does not have/);
+const CCITT = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'ccitt');
+
+/** A real Group 4 stream and the pixels it holds. @param {string} name */
+function faxFixture(name) {
+  const manifest = JSON.parse(readFileSync(join(CCITT, 'manifest.json'), 'utf8'));
+  const item = manifest.find((/** @type {{name: string}} */ m) => m.name === name);
+  assert.ok(item, `fixture ${name}`);
+  return {
+    ...item,
+    data: readFileSync(join(CCITT, `${name}.bin`)),
+    pixels: readFileSync(join(CCITT, `${name}.expected`)),
+  };
+}
+
+test('a fax-encoded scan comes out as a PNG holding the right pixels', () => {
+  const fax = faxFixture('rects.group4');
+  const pdf = pdfWithImage({
+    dict:
+      `<< /Type /XObject /Subtype /Image /Width ${fax.width} /Height ${fax.height} ` +
+      '/ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /CCITTFaxDecode ' +
+      `/DecodeParms << /K -1 /Columns ${fax.width} /Rows ${fax.height} >>`,
+    data: fax.data,
+  });
+
+  const { images, unreadable } = extractPdfImages(pdf);
+  assert.deepEqual(unreadable, []);
+  assert.equal(images.length, 1);
+  assert.equal(images[0].mediaType, 'image/png');
+  assert.equal(images[0].width, fax.width);
+
+  // Not "it produced a PNG" — the pixels inside it are the ones that were
+  // encoded. Unwrapping IDAT and stripping the per-row filter byte is the
+  // only way to assert that rather than assume it.
+  const idatAt = images[0].data.indexOf('IDAT', 0, 'latin1');
+  const length = images[0].data.readUInt32BE(idatAt - 4);
+  const framed = inflateSync(images[0].data.subarray(idatAt + 4, idatAt + 4 + length));
+
+  const rowBytes = Math.ceil(fax.width / 8);
+  for (let y = 0; y < fax.height; y++) {
+    const row = framed.subarray(y * (rowBytes + 1) + 1, (y + 1) * (rowBytes + 1));
+    assert.ok(row.equals(fax.pixels.subarray(y * rowBytes, (y + 1) * rowBytes)), `row ${y}`);
   }
+});
+
+test('a fax page whose declared width contradicts the image is refused', () => {
+  // Decoding at the wrong column count produces a sheared page that still
+  // looks like a page. Refusing it is the entire point of this file.
+  const fax = faxFixture('rects.group4');
+  const pdf = pdfWithImage({
+    dict:
+      `<< /Type /XObject /Subtype /Image /Width ${fax.width} /Height ${fax.height} ` +
+      '/ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /CCITTFaxDecode ' +
+      `/DecodeParms << /K -1 /Columns ${fax.width - 8} /Rows ${fax.height} >>`,
+    data: fax.data,
+  });
+
+  const { images, unreadable } = extractPdfImages(pdf);
+  assert.equal(images.length, 0);
+  assert.equal(unreadable[0].filter, 'CCITTFaxDecode');
+});
+
+test('a fax stream that is not one is reported rather than rendered', () => {
+  const pdf = pdfWithImage({
+    dict:
+      '<< /Type /XObject /Subtype /Image /Width 200 /Height 200 ' +
+      '/ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /CCITTFaxDecode ' +
+      '/DecodeParms << /K -1 /Columns 200 /Rows 200 >>',
+    data: Buffer.from(Array.from({ length: 3000 }, (_, i) => (i * 53 + 17) & 0xff)),
+  });
+
+  const { images, unreadable } = extractPdfImages(pdf);
+  assert.equal(images.length, 0);
+  assert.match(unreadable[0].reason, /could not be decoded/);
+});
+
+test('JBIG2 is still named rather than guessed at', () => {
+  // The one encoding left. It is a subsystem rather than a table, and there
+  // is no independent encoder to check a decoder against, so it stays named.
+  const pdf = pdfWithImage({
+    dict: '<< /Type /XObject /Subtype /Image /Width 200 /Height 200 /Filter /JBIG2Decode',
+    data: Buffer.alloc(2000, 0x01),
+  });
+  const { images, unreadable } = extractPdfImages(pdf);
+  assert.equal(images.length, 0);
+  assert.equal(unreadable[0].filter, 'JBIG2Decode');
+  assert.match(unreadable[0].reason, /decoder Chitraq does not have/);
 });
 
 test('a colour space that would need converting is refused rather than mangled', () => {
@@ -215,7 +298,7 @@ test('a PDF with nothing extractable fails with the reason, not a shrug', async 
 
   await assert.rejects(
     () => p.capabilities[Capability.OcrDocument].run({ bytes: pdf }),
-    /bilevel fax encoding/
+    /JBIG2Decode is a bilevel encoding/
   );
 });
 
