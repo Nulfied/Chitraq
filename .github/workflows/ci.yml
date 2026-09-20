@@ -91,6 +91,32 @@ jobs:
           fi
           exit "$code"
 
+      - name: Documented test count matches the suite
+        # The count was stated in five places and four of them were stale —
+        # the README and the landing page said 326 while STATUS.md said 352.
+        # Nobody was careless; the number is just the kind of fact that goes
+        # out of date the moment a test is added, which is every commit.
+        #
+        # Reads the count out of the run that already happened rather than
+        # running the suite again. Linux only: the documents are the same on
+        # every platform, so checking them three times says nothing new.
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          # Anchored to the end of the line, not the start: the reporter
+          # prefixes the summary with a multibyte glyph, and `^.` in byte
+          # mode matches one third of it. That mistake has now been made
+          # twice in this file, in two different steps.
+          count=$(grep -aoE 'tests [0-9]+$' test-output.txt | grep -oE '[0-9]+' | head -1)
+          if [ -z "$count" ]; then
+            echo "::error::Could not read a test count from the run output."
+            exit 1
+          fi
+          node tools/check-test-count.mjs "$count" || {
+            echo "::error::Documentation states a test count that is not $count. Run: node tools/check-test-count.mjs $count --fix"
+            exit 1
+          }
+
       - name: Keep the output when it fails
         if: failure()
         uses: actions/upload-artifact@v4
