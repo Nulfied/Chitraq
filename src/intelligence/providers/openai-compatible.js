@@ -31,6 +31,10 @@
  */
 
 import { groundedCapabilities } from './grounded.js';
+import { Capability } from '../registry.js';
+
+/** Named once, so a typo is a reference error rather than a dead capability. */
+const EMBED_TEXT = Capability.EmbedText;
 
 /**
  * Hosts that speak this protocol. `baseUrl` ends before `/chat/completions`.
@@ -51,6 +55,9 @@ export const PRESETS = {
     label: 'Google Gemini',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
     model: 'gemini-2.0-flash',
+    // Real semantic embeddings on a free tier, which is the one thing that
+    // most improves retrieval without installing anything.
+    embedModel: 'text-embedding-004',
     cost: 'free',
     keyUrl: 'https://aistudio.google.com/apikey',
   },
@@ -65,6 +72,7 @@ export const PRESETS = {
     label: 'GitHub Models',
     baseUrl: 'https://models.github.ai/inference',
     model: 'openai/gpt-4o-mini',
+    embedModel: 'openai/text-embedding-3-small',
     cost: 'free',
     keyUrl: 'https://github.com/settings/tokens',
   },
@@ -79,6 +87,7 @@ export const PRESETS = {
     label: 'Mistral',
     baseUrl: 'https://api.mistral.ai/v1',
     model: 'mistral-large-latest',
+    embedModel: 'mistral-embed',
     cost: 'paid',
     keyUrl: 'https://console.mistral.ai/api-keys',
   },
@@ -93,6 +102,7 @@ export const PRESETS = {
     label: 'OpenAI',
     baseUrl: 'https://api.openai.com/v1',
     model: 'gpt-4o-mini',
+    embedModel: 'text-embedding-3-small',
     cost: 'paid',
     keyUrl: 'https://platform.openai.com/api-keys',
   },
@@ -104,6 +114,10 @@ export const PRESETS = {
     label: 'Local OpenAI-compatible server',
     baseUrl: 'http://127.0.0.1:8080/v1',
     model: 'local-model',
+    // llama.cpp and LM Studio both serve /v1/embeddings when an embedding
+    // model is loaded. Named the same as the chat model because most local
+    // servers serve exactly one thing and ignore this field.
+    embedModel: 'local-model',
     cost: 'free',
     locality: 'local',
     keyUrl: null,
@@ -119,6 +133,7 @@ export const PRESET_NAMES = Object.freeze(Object.keys(PRESETS));
  * @param {string} [opts.apiKey]
  * @param {string} [opts.baseUrl]     overrides the preset
  * @param {string} [opts.model]       overrides the preset; model names move
+ * @param {string} [opts.embedModel]  an embedding model, when the host has one
  * @param {number} [opts.maxTokens]
  * @param {number} [opts.timeoutMs]
  * @param {typeof fetch} [opts.fetch] injected for tests
@@ -144,6 +159,11 @@ export function openAiCompatibleProvider(opts = {}) {
   const cost = /** @type {'free'|'paid'} */ (
     preset?.cost ?? (locality === 'local' ? 'free' : 'paid')
   );
+  // Only declared when there is something to call. A host with no
+  // embedding model must not advertise the capability and then fail on the
+  // first document: the router would have nothing to fall through to that
+  // it had not already ranked below this.
+  const embedModel = opts.embedModel ?? preset?.embedModel ?? null;
   const maxTokens = opts.maxTokens ?? 8000;
   const timeoutMs = opts.timeoutMs ?? 120_000;
   const doFetch = opts.fetch ?? globalThis.fetch;
@@ -174,6 +194,41 @@ export function openAiCompatibleProvider(opts = {}) {
   }
 
   /**
+   * POST JSON to this host and return the parsed reply.
+   *
+   * Shared by chat and embeddings, so the auth header, the timeout and the
+   * "which host failed" wording are written once.
+   *
+   * @param {string} path
+   * @param {object} body
+   */
+  async function postJson(path, body) {
+    if (!baseUrl) throw new Error('No base URL: give a preset or a baseUrl.');
+
+    let response;
+    try {
+      response = await doFetch(`${baseUrl}${path}`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(opts.apiKey ? { authorization: `Bearer ${opts.apiKey}` } : {}),
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err);
+      throw new Error(`${label} could not be reached: ${why}`);
+    }
+
+    if (!response.ok) {
+      const detail = (await response.text().catch(() => '')).slice(0, 400);
+      throw new Error(`${label} returned ${response.status}. ${detail}`.trim());
+    }
+    return response.json();
+  }
+
+  /**
    * @param {string} system
    * @param {string} user
    * @param {object} schema
@@ -200,29 +255,7 @@ export function openAiCompatibleProvider(opts = {}) {
       ? { type: 'json_schema', json_schema: { name: 'result', strict: true, schema } }
       : { type: 'json_object' };
 
-    const signal = AbortSignal.timeout(timeoutMs);
-    let response;
-    try {
-      response = await doFetch(`${baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          ...(opts.apiKey ? { authorization: `Bearer ${opts.apiKey}` } : {}),
-        },
-        body: JSON.stringify(body),
-        signal,
-      });
-    } catch (err) {
-      const why = err instanceof Error ? err.message : String(err);
-      throw new Error(`${label} could not be reached: ${why}`);
-    }
-
-    if (!response.ok) {
-      const detail = (await response.text().catch(() => '')).slice(0, 400);
-      throw new Error(`${label} returned ${response.status}. ${detail}`.trim());
-    }
-
-    const payload = await response.json();
+    const payload = await postJson('/chat/completions', body);
     const text = payload?.choices?.[0]?.message?.content;
     if (typeof text !== 'string' || !text.trim()) {
       throw new Error(`${label} returned no content.`);
@@ -250,7 +283,47 @@ export function openAiCompatibleProvider(opts = {}) {
       return locality === 'local' || !!opts.apiKey;
     },
 
-    capabilities: groundedCapabilities({
+    capabilities: {
+      ...(embedModel
+        ? {
+            [EMBED_TEXT]: {
+              // The single biggest retrieval improvement over the
+              // deterministic floor, and on Gemini or GitHub Models it costs
+              // nothing. Rated just under a local Ollama embedder: same kind
+              // of quality, but a network round trip per batch.
+              quality: 0.84,
+              latencyMs: locality === 'local' ? 80 : 400,
+              costMicros: cost === 'free' ? 0 : 20,
+              /** @param {{texts: string[]}} task */
+              run: async (task) => {
+                const texts = task.texts ?? [];
+                if (!texts.length) throw new Error('Nothing to embed.');
+
+                const payload = await postJson('/embeddings', {
+                  model: embedModel,
+                  input: texts,
+                });
+                // The response is ordered by an `index` field rather than by
+                // position. Trusting the order would misalign every vector
+                // with its text on any host that reorders, and a misaligned
+                // embedding is not an error anywhere — it is silently worse
+                // search forever.
+                const rows = [...(payload?.data ?? [])].sort(
+                  (a, b) => (a.index ?? 0) - (b.index ?? 0)
+                );
+                const vectors = rows.map((r) => r.embedding).filter(Array.isArray);
+
+                if (vectors.length !== texts.length) {
+                  throw new Error(
+                    `${label} returned ${vectors.length} embeddings for ${texts.length} texts.`
+                  );
+                }
+                return { model: `${opts.preset ?? 'openai'}:${embedModel}`, dim: vectors[0].length, vectors };
+              },
+            },
+          }
+        : {}),
+      ...groundedCapabilities({
       ask,
       // Rated below Claude and above the deterministic floor. Honest rather
       // than flattering: these are mostly smaller models, and the router
@@ -263,7 +336,8 @@ export function openAiCompatibleProvider(opts = {}) {
         'relate.propose': { quality: 0.76, latencyMs: 2000, costMicros: cost === 'free' ? 0 : 250 },
         'interpret.query': { quality: 0.78, latencyMs: 1200, costMicros: cost === 'free' ? 0 : 100 },
       },
-    }),
+      }),
+    },
   };
 }
 

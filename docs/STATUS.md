@@ -5,7 +5,7 @@ What is actually built, what is partial, and what is deliberately not built.
 States: **IMPLEMENTED** (built and tested), **PARTIAL** (works, with a stated
 limit), **NOT BUILT** (deliberately deferred).
 
-Last updated: 2026-09-20. 419 tests passing.
+Last updated: 2026-09-20. 422 tests passing.
 
 ---
 
@@ -153,6 +153,7 @@ reported on the Status screen; not automatic.
 | **Cost reporting** | IMPLEMENTED | By provider, capability and day |
 | Deterministic provider (11 capabilities) | IMPLEMENTED | |
 | Ollama provider | IMPLEMENTED | Verified live — see below |
+| **OpenAI-compatible embeddings** | IMPLEMENTED | Free semantic embeddings on Gemini and GitHub Models; also OpenAI, Mistral, and any local server |
 | **Ollama vision provider** | IMPLEMENTED | Verified live with moondream. Uses whichever vision model is pulled — `ocr.image`, `vision.describe` |
 | **Whisper provider** | IMPLEMENTED | Protocol stand-in only; not run against a real engine |
 | **Scanned-PDF provider** | IMPLEMENTED | Serves `ocr.document` by delegating each page to `ocr.image` |
@@ -375,9 +376,17 @@ says otherwise.
 
 ## Honest weaknesses
 
-1. **The built-in embedder is lexical, not semantic.** It will not connect "car"
-   to "automobile". It scores itself 0.35 so any real model outranks it.
-   Installing Ollama is the single biggest retrieval improvement available.
+1. **The built-in embedder is lexical, not semantic.** It will not connect
+   "car" to "automobile". It scores itself 0.35 so any real embedder
+   outranks it, and replacing it is still the single biggest retrieval
+   improvement available — but it no longer requires installing anything.
+   Ollama's `nomic-embed-text` does it locally, and `chitraq setup` now
+   offers Google Gemini and GitHub Models, both of which embed on a free
+   tier. The menu marks which providers do, because it is the difference
+   that matters most and the least obvious from a provider's name.
+
+   The floor stays lexical, and that is the point of a floor: with nothing
+   configured, search still works and says what it is.
 2. **A local 3B model is slow for bulk extraction on modest hardware.**
    Throughput here is a fixed **five tokens a second**, so the schema decides
    the cost: asking for kind, epistemic and confidence per claim made the
@@ -391,14 +400,25 @@ says otherwise.
    and chooses the deterministic floor deliberately, saying so, rather than
    discovering it one timeout at a time. On a machine with a GPU the same
    code uses the model, because the measurement says it can.
+
+   Hardware is no longer the only way out of this. Groq and Cerebras serve
+   large models on free tiers at speeds no laptop reaches, and `chitraq
+   setup` configures one in a minute. The measurement-first approach is what
+   makes that safe: the router learns the new latency from its own runs
+   rather than being told to trust it.
 3. **Extraction by the floor is segmentation, not comprehension.**
    Measured on a 41,000-character specification: llama3.2 took 80 seconds and
    returned *one* claim; the deterministic segmenter finds 46 to 69. On a real
    import of 27 documents the model timed out on four and served one, and the
    floor did the other twenty-six — which produced better extraction than the
-   model would have. Falling back is now reported rather than silent. Chunked
-   extraction, so the model sees pieces it can handle, is the fix and is not
-   built: it would be roughly ten minutes per large document on this hardware.
+   model would have. Falling back is now reported rather than silent.
+
+   This entry used to end "chunked extraction is the fix and is not built",
+   which stopped being true and stayed written down. It is built: documents
+   over 6,000 characters are split and extracted piece by piece. On a slow
+   local model that trades one timeout for a long wait, which is why the cost
+   is estimated from this machine's own run history before the attempt. On a
+   fast free tier — Groq, Cerebras — it is no longer the bottleneck at all.
 4. **Confidence is derived, not asked for.** A real import produced 402 of
    460 proposals at exactly 0.4: llama3.2 emitting a default rather than
    judging. The model is now asked only for the claim sentences, and the

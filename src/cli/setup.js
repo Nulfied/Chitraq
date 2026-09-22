@@ -49,6 +49,7 @@ const OLLAMA = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
  * @property {string} label
  * @property {'free'|'paid'} cost
  * @property {string|null} keyUrl
+ * @property {boolean} embeds   serves embeddings, not only chat
  * @property {string} note
  */
 
@@ -69,7 +70,14 @@ export function choices() {
       label: p.label,
       cost: /** @type {'free'|'paid'} */ (p.cost),
       keyUrl: p.keyUrl,
-      note: p.cost === 'free' ? 'has a free tier' : 'metered',
+      // Whether a host also embeds is the most useful thing on this menu.
+      // The built-in embedder is lexical — it will not connect "car" to
+      // "automobile" — and replacing it is the single biggest retrieval
+      // improvement available. Two of the free tiers do it.
+      embeds: Boolean(p.embedModel),
+      note:
+        (p.cost === 'free' ? 'free tier' : 'metered') +
+        (p.embedModel ? ' · semantic search too' : ''),
     }));
 
   const local = {
@@ -77,6 +85,7 @@ export function choices() {
     label: PRESETS.local.label,
     cost: /** @type {'free'|'paid'} */ ('free'),
     keyUrl: null,
+    embeds: true,
     note: 'llama.cpp, LM Studio, vLLM — nothing leaves the machine',
   };
 
@@ -85,6 +94,9 @@ export function choices() {
     label: 'Claude',
     cost: /** @type {'free'|'paid'} */ ('paid'),
     keyUrl: 'https://console.anthropic.com/settings/keys',
+    // Anthropic serves no embedding model, so it cannot replace the lexical
+    // embedder however good it is at everything else.
+    embeds: false,
     note: 'highest quality; needs the SDK — npm install @anthropic-ai/sdk',
   };
 
@@ -300,6 +312,11 @@ export async function runSetup(chitraq, info = {}) {
 
   const options = choices();
   line('  Add a hosted model? Free tiers first.');
+  line('');
+  line('  The ones marked "semantic search too" also replace the built-in');
+  line('  embedder, which is lexical — it cannot connect "car" to');
+  line('  "automobile". That is the single biggest retrieval improvement');
+  line('  available, and two of the free tiers include it.');
   line('');
   options.forEach((choice, i) => {
     const tag = choice.cost === 'free' ? 'free' : 'paid';

@@ -287,7 +287,69 @@ test('every preset is usable and declares what the router needs', () => {
     assert.match(p.locality, /^(local|remote)$/, `${name}: locality`);
     assert.match(p.cost, /^(free|paid)$/, `${name}: cost`);
     assert.ok(p.model, `${name}: a default model`);
-    assert.equal(Object.keys(p.capabilities).length, 6, `${name}: six capabilities`);
     assert.ok(PRESETS[name].baseUrl.startsWith('http'), `${name}: base URL`);
+
+    for (const capability of ['answer', 'extract.claims', 'summarize', 'detect.conflict', 'relate.propose', 'interpret.query']) {
+      assert.ok(p.capabilities[capability], `${name}: serves ${capability}`);
+    }
+
+    // Embeddings only where the host actually has a model for them. A
+    // provider that advertises the capability and then fails on the first
+    // document is worse than one that never claimed it: the router already
+    // ranked it above the floor it would have to fall back to.
+    assert.equal(
+      Boolean(p.capabilities['embed.text']),
+      Boolean(PRESETS[name].embedModel),
+      `${name}: embeddings declared only when served`
+    );
   }
+});
+
+test('embeddings come back aligned to the texts that produced them', async () => {
+  // Hosts return the rows with an `index` field and are not obliged to keep
+  // them in order. Trusting position would pair every vector with the wrong
+  // text — which is not an error anywhere, just permanently worse search.
+  // `text` rather than `body`: the stub's default wraps a body in the chat
+  // `choices` envelope, and an embeddings reply is not that shape.
+  const fetchImpl = stubFetch([
+    {
+      text: JSON.stringify({
+        data: [
+          { index: 2, embedding: [0.3, 0.3] },
+          { index: 0, embedding: [0.1, 0.1] },
+          { index: 1, embedding: [0.2, 0.2] },
+        ],
+      }),
+    },
+  ]);
+  const p = openAiCompatibleProvider({ preset: 'gemini', apiKey: 'k', fetch: fetchImpl });
+
+  const out = await p.capabilities['embed.text'].run({ texts: ['first', 'second', 'third'] });
+  assert.deepEqual(out.vectors, [[0.1, 0.1], [0.2, 0.2], [0.3, 0.3]]);
+  assert.equal(out.dim, 2);
+  assert.match(out.model, /text-embedding/);
+
+  assert.equal(fetchImpl.calls[0].url, 'https://generativelanguage.googleapis.com/v1beta/openai/embeddings');
+  assert.deepEqual(fetchImpl.calls[0].body.input, ['first', 'second', 'third']);
+});
+
+test('a short embedding response is an error, not a silent misalignment', async () => {
+  // Returning fewer vectors than texts would otherwise leave later chunks
+  // paired with earlier vectors, or undefined.
+  const fetchImpl = stubFetch([
+    { text: JSON.stringify({ data: [{ index: 0, embedding: [0.1] }] }) },
+  ]);
+  const p = openAiCompatibleProvider({ preset: 'gemini', apiKey: 'k', fetch: fetchImpl });
+
+  await assert.rejects(
+    () => p.capabilities['embed.text'].run({ texts: ['a', 'b', 'c'] }),
+    /1 embeddings for 3 texts/
+  );
+});
+
+test('a free-tier embedder is free and remote, so it needs one gate only', () => {
+  const gemini = openAiCompatibleProvider({ preset: 'gemini', apiKey: 'k' });
+  assert.equal(gemini.capabilities['embed.text'].costMicros, 0);
+  assert.equal(gemini.cost, 'free');
+  assert.equal(gemini.locality, 'remote');
 });
