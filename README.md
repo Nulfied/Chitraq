@@ -19,7 +19,7 @@ account to create and no API bill.
 ```bash
 git clone https://github.com/Nulfied/Chitraq
 cd chitraq
-npm test                                     # 415 tests, no install step
+npm test                                     # 419 tests, no install step
 
 node scripts/seed.js demo/memory.chitraq     # build a demo memory
 node src/server/serve.js --db demo/memory.chitraq
@@ -221,6 +221,14 @@ Scanned PDFs work too. Every scanner app people actually use — Adobe Scan,
 CamScanner, Microsoft Lens, the camera on a phone — writes JPEG inside the
 PDF, and those bytes are already a complete image. Chitraq takes the file
 apart and reads each page with whatever reads images.
+
+Audio and video take the same path: the file goes to whatever serves
+`speech.transcribe`, and the transcript comes back with timestamps that
+become evidence locators. For video that server needs ffmpeg, which every
+mainstream Whisper build bundles — Speaches, faster-whisper-server, WhisperX,
+or whisper.cpp built with it. Chitraq carries no audio decoder and says so
+rather than pretending: if a server refuses a container, the error names the
+server and repeats what it said.
 
 Encrypted PDFs open too. Almost every "protected" PDF — a bank statement, an
 exam form, a government download — has an empty user password and only an
@@ -503,7 +511,7 @@ limit, and how to report something privately.
 npm test
 ```
 
-415 tests covering the invariants, not just the happy path: that AI cannot
+419 tests covering the invariants, not just the happy path: that AI cannot
 overwrite your edges, that a stale proposal is refused at accept time, that
 memory survives the total loss of every intelligence provider, that superseded
 pricing never appears as current, that two devices editing the same note raises

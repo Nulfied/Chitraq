@@ -5,7 +5,7 @@ What is actually built, what is partial, and what is deliberately not built.
 States: **IMPLEMENTED** (built and tested), **PARTIAL** (works, with a stated
 limit), **NOT BUILT** (deliberately deferred).
 
-Last updated: 2026-09-20. 415 tests passing.
+Last updated: 2026-09-20. 419 tests passing.
 
 ---
 
@@ -223,7 +223,7 @@ reported on the Status screen; not automatic.
 | **Encrypted PDF** | IMPLEMENTED | Standard security handler, R2 to R6, RC4 and AES. A real user password is refused, not guessed |
 | **Images** | IMPLEMENTED | Read by a local vision model through Ollama; captured verbatim with an honest note when none is present |
 | **Audio** | IMPLEMENTED | Read by any local Whisper server; timestamps kept as evidence locators |
-| Video | PARTIAL | Captured; no provider extracts its audio track |
+| **Video** | IMPLEMENTED | Same path as audio. Needs a Whisper server that bundles ffmpeg, which every mainstream one does |
 
 The partials are honest ones: the bytes are always stored, and the capability
 that would unlock them is named rather than silently doing nothing.
@@ -449,9 +449,21 @@ says otherwise.
 10. **An unlocked vault lives in process memory.** Something that can read this
    process can read the data key. Defending against that is a different order
    of problem and is not attempted.
-11. **Video depends on which speech server you run.** The file is posted to
-    whatever serves `speech.transcribe` with its own media type, so an
-    ffmpeg-backed server — Speaches, faster-whisper-server — reads an MP4
-    directly. whisper.cpp's own server wants audio, and Chitraq does not
-    demux the container for it. This entry previously said nothing extracts
-    the audio track, which was wrong about the common case.
+11. **Video needs a speech server that bundles ffmpeg.** A video is a
+    container holding a video track and a compressed audio track, and
+    Whisper wants raw samples — so something must unwrap and decode it.
+    Every mainstream server already does: Speaches, faster-whisper-server,
+    WhisperX, and whisper.cpp built with ffmpeg. Against those, video works
+    exactly as audio does and is tested doing so.
+
+    A bare whisper.cpp build wants a WAV and will refuse an MP4. Chitraq
+    does not carry an AAC decoder, and would not add one lightly: it is a
+    large subsystem, and with no independent encoder available there would
+    be no way to check it — the same reason JBIG2 is not implemented.
+
+    What was actually wrong here was the reporting, not the capability. A
+    configured server that refused a container produced "stored as-is;
+    reading it needs speech.transcribe" — the identical wording used when
+    *nothing* is installed, which reads as "you have no transcriber" and
+    sends somebody to install what they are already running. The two are now
+    separate messages, and the failing one repeats the server's own words.

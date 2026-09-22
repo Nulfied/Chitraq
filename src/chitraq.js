@@ -896,6 +896,12 @@ export class Chitraq {
     // No provider for this slot is the normal case, not an error.
     if (!this.registry.supporting(parsed.needsCapability).length) return null;
 
+    // From here on something *is* configured, so a failure is a different
+    // situation from having nothing installed — and it used to report the
+    // same words. A Whisper server that rejects an MP4 produced "reading it
+    // needs speech.transcribe", which reads as "you have no transcriber" and
+    // sends somebody to install the server they are already running.
+
     const run = await this.router.tryRun(
       parsed.needsCapability,
       {
@@ -907,7 +913,20 @@ export class Chitraq {
     );
 
     const text = String(run?.result?.text ?? '').trim();
-    if (!text) return null;
+    if (!text) {
+      // `tryRun` returns null when every provider failed, so the reason is
+      // not in hand here. It is in the run log: the router records each
+      // attempt with the provider's own error, which is exactly the thing
+      // worth repeating back — "failed to read audio data" from the server
+      // tells somebody more than any sentence written here could.
+      const [last] = this.intelligenceLog({ capability: parsed.needsCapability, limit: 1 });
+      parsed.readFailed = {
+        capability: parsed.needsCapability,
+        provider: last?.provider ?? null,
+        error: last?.error ?? 'the provider returned no text',
+      };
+      return null;
+    }
 
     const via = {
       capability: parsed.needsCapability,

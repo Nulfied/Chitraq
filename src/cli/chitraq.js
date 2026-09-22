@@ -177,7 +177,24 @@ async function run(command, rest, flags, c) {
       }
       console.log(`\n  captured    ${result.source.id} (${result.parsed.mediaType})`);
       if (result.parsed.needsCapability) {
-        console.log(`  no text     stored as-is; reading it needs ${result.parsed.needsCapability}`);
+        const failed = result.parsed.readFailed;
+        if (failed) {
+          // Something is configured and it said no. Saying "needs
+          // speech.transcribe" here would send somebody to install what
+          // they already have.
+          console.log(`  no text     ${failed.provider ?? 'the provider'} could not read this`);
+          console.log(`              ${truncate(String(failed.error), 90)}`);
+          if (String(result.parsed.mediaType).startsWith('video/')) {
+            console.log('');
+            console.log('              A video has to be demuxed and decoded before it is');
+            console.log('              audio. Whisper servers that bundle ffmpeg do that');
+            console.log('              for you — Speaches, faster-whisper-server, WhisperX,');
+            console.log('              or whisper.cpp built with ffmpeg. Chitraq does not');
+            console.log('              carry a decoder, so it needs one of those.');
+          }
+        } else {
+          console.log(`  no text     stored as-is; reading it needs ${result.parsed.needsCapability}`);
+        }
         console.log('');
         break;
       }
