@@ -5,7 +5,7 @@ What is actually built, what is partial, and what is deliberately not built.
 States: **IMPLEMENTED** (built and tested), **PARTIAL** (works, with a stated
 limit), **NOT BUILT** (deliberately deferred).
 
-Last updated: 2026-09-20. 424 tests passing.
+Last updated: 2026-09-20. 429 tests passing.
 
 ---
 
@@ -430,11 +430,24 @@ says otherwise.
 5. **Contradiction detection is narrow.** Conflicting figures about the same
    subject, and negated restatements. It misses most real contradictions, and
    is tuned for precision because a false "these disagree" is expensive to
-   read. It also misses pairs a person would call obvious — `p99 latency at
-   38ms` against `88ms` does not fire, while `the trial lasts 14 days` against
-   `30 days` does, because the surrounding words have to match closely enough.
-   On real documents it did find a genuine one: a README claiming Node 22.5
-   against an engines field of 24.
+   read. On real documents it did find a genuine one: a README claiming Node
+   22.5 against an engines field of 24.
+
+   This entry used to say `p99 latency at 38ms` against `88ms` did not fire
+   "because the surrounding words have to match closely enough". That
+   diagnosis was wrong, and measuring it said so: those two sentences overlap
+   at 0.5, comfortably above the threshold. The figure was never extracted at
+   all. The pattern required a word boundary after the digits, `38ms` has
+   none, and the match failed silently — so every figure written against its
+   unit disappeared before anything could compare it.
+
+   Technical units are now recognised where they are actually written, with
+   no space: milliseconds, bytes, hertz, pixels. Measured on eight pairs that
+   should disagree and six that should not, it went from **4/8 to 8/8 with
+   no false positive**. Milliseconds are kept distinct from millions, which
+   the plural-stripping would otherwise have folded together.
+
+   Still narrow. It compares figures and negations, not meaning.
 6. **Concurrency is SQLite WAL and nothing more.** Fine for one user and one
    process. A multi-user server needs work not yet done.
 7. **Nothing watches anything unless you start it.** `chitraq watch` is a

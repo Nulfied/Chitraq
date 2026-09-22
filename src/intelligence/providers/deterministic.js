@@ -1081,7 +1081,16 @@ function extractNumbers(text) {
   // matches the first letter of "minutes" and silently turns "40 minutes" into
   // forty million. Longer words are also listed before their abbreviations so
   // "5 million" is not read as "5m illion".
-  const NUMBER = /([$£€₹]?)\s?(\d[\d,]*(?:\.\d+)?)\s?(%|percent|thousand|million|billion|minutes?|mins?|seconds?|secs?|hours?|hrs?|days?|weeks?|months?|years?|people|usd|eur|gbp|inr|bn|k|m)?\b/gi;
+  //
+  // That same \b used to lose every unit written against its number. `38ms`
+  // has no boundary after `38`, and `m` cannot match because `s` follows it,
+  // so the whole match failed and the figure vanished — which is why
+  // "p99 latency at 38ms" against "88ms" reported no disagreement while
+  // "14 days" against "30 days" reported one. The technical units below are
+  // the ones that get written that way, longest first so `mb` is not read as
+  // a million followed by a stray letter.
+  const NUMBER =
+    /([$£€₹]?)\s?(\d[\d,]*(?:\.\d+)?)\s?(%|percent|thousand|million|billion|minutes?|mins?|seconds?|secs?|hours?|hrs?|days?|weeks?|months?|years?|people|usd|eur|gbp|inr|kib|mib|gib|tib|khz|mhz|ghz|kb|mb|gb|tb|fps|rpm|px|hz|ms|µs|us|ns|bn|k|m)?\b/gi;
 
   for (const m of text.matchAll(NUMBER)) {
     const raw = m[0].trim();
@@ -1109,11 +1118,26 @@ function extractNumbers(text) {
  */
 function normaliseUnit(suffix) {
   if (!suffix) return 'count';
-  const base = suffix.replace(/s$/, '');
+  const lower = suffix.toLowerCase();
+
+  // Checked before the plural is stripped, because these are not plurals.
+  // `ms` would become `m` — the token million uses — so a latency in
+  // milliseconds would compare equal to a figure in millions.
+  if (EXACT_UNITS.has(lower)) return lower;
+
+  const base = lower.replace(/s$/, '');
   return (
     { min: 'minute', sec: 'second', hr: 'hour', percent: '%' }[base] ?? base
   );
 }
+
+/** Units that end in `s` without being plural. */
+const EXACT_UNITS = new Set([
+  'ms', 'µs', 'us', 'ns',
+  'kb', 'mb', 'gb', 'tb', 'kib', 'mib', 'gib', 'tib',
+  'hz', 'khz', 'mhz', 'ghz',
+  'px', 'fps', 'rpm',
+]);
 
 // ----------------------------------------------------------------- rerank
 
