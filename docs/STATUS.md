@@ -5,7 +5,7 @@ What is actually built, what is partial, and what is deliberately not built.
 States: **IMPLEMENTED** (built and tested), **PARTIAL** (works, with a stated
 limit), **NOT BUILT** (deliberately deferred).
 
-Last updated: 2026-09-20. 408 tests passing.
+Last updated: 2026-09-20. 415 tests passing.
 
 ---
 
@@ -220,7 +220,7 @@ reported on the Status screen; not automatic.
 | **Folder capture** | IMPLEMENTED | Resumable, idempotent, skips machinery, states a reason for every omission |
 | **PDF** | IMPLEMENTED | Dependency-free: inflates content streams, reads text operators, extracts document info |
 | **Scanned PDF** | IMPLEMENTED | Page images extracted and read, including CCITT Group 3/4 fax. JBIG2 named as unreadable |
-| Encrypted PDF | PARTIAL | Detected and reported; file still captured verbatim |
+| **Encrypted PDF** | IMPLEMENTED | Standard security handler, R2 to R6, RC4 and AES. A real user password is refused, not guessed |
 | **Images** | IMPLEMENTED | Read by a local vision model through Ollama; captured verbatim with an honest note when none is present |
 | **Audio** | IMPLEMENTED | Read by any local Whisper server; timestamps kept as evidence locators |
 | Video | PARTIAL | Captured; no provider extracts its audio track |

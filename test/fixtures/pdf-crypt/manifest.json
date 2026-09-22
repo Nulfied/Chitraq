@@ -1,0 +1,47 @@
+{
+  "lines": [
+    "Chitraq decrypts the standard security handler.",
+    "The user password is empty and the owner password is not.",
+    "Figures that must survive: 1728 columns, 27.26 seconds, 0.35 score."
+  ],
+  "fixtures": [
+    {
+      "name": "rc4-40",
+      "algorithm": "RC4-40",
+      "bytes": 1175
+    },
+    {
+      "name": "rc4-128",
+      "algorithm": "RC4-128",
+      "bytes": 1176
+    },
+    {
+      "name": "aes-128",
+      "algorithm": "AES-128",
+      "bytes": 1295
+    },
+    {
+      "name": "aes-256",
+      "algorithm": "AES-256",
+      "bytes": 1544
+    },
+    {
+      "name": "aes-256-r5",
+      "algorithm": "AES-256-R5",
+      "bytes": 1544
+    }
+  ],
+  "locked": [
+    {
+      "name": "user-password-rc4",
+      "algorithm": "RC4-128",
+      "bytes": 1176
+    },
+    {
+      "name": "user-password-aes",
+      "algorithm": "AES-256",
+      "bytes": 1544
+    }
+  ],
+  "password": "open-sesame"
+}

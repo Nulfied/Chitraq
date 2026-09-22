@@ -163,6 +163,11 @@ async function run(command, rest, flags, c) {
               filename: basename(target),
               uri: pathToFileURL(target).href,
               title: flags.title,
+              // From the environment rather than a flag, for the same reason
+              // API keys are: an argument lands in shell history and in the
+              // process list. Only needed for the rare PDF with a real user
+              // password; most encrypted ones have none.
+              password: process.env.CHITRAQ_PDF_PASSWORD,
             }
       );
 
@@ -924,6 +929,7 @@ function usage(code = 0) {
     --accept-all    accept every pending proposal (with 'review')
     --accept-above <n>  accept proposals at or above this confidence
     --dry-run       for 'import' and folder 'ingest': write nothing, report what would happen
+    (a PDF needing a password reads it from CHITRAQ_PDF_PASSWORD, not a flag)
     --limit <n>     how many results
     --better        ask a model instead of quoting your own words
     --no-cache      skip the answer cache

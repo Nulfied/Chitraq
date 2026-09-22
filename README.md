@@ -19,7 +19,7 @@ account to create and no API bill.
 ```bash
 git clone https://github.com/Nulfied/Chitraq
 cd chitraq
-npm test                                     # 408 tests, no install step
+npm test                                     # 415 tests, no install step
 
 node scripts/seed.js demo/memory.chitraq     # build a demo memory
 node src/server/serve.js --db demo/memory.chitraq
@@ -221,6 +221,12 @@ Scanned PDFs work too. Every scanner app people actually use — Adobe Scan,
 CamScanner, Microsoft Lens, the camera on a phone — writes JPEG inside the
 PDF, and those bytes are already a complete image. Chitraq takes the file
 apart and reads each page with whatever reads images.
+
+Encrypted PDFs open too. Almost every "protected" PDF — a bank statement, an
+exam form, a government download — has an empty user password and only an
+owner password, which readers are free to ignore and all of them do. Those
+are read directly. A PDF with a real user password is refused rather than
+guessed at; set `CHITRAQ_PDF_PASSWORD` if you have it.
 
 Fax-encoded pages (`CCITTFaxDecode`, Group 3 and Group 4) are decoded too,
 from the T.4 and T.6 tables, with no dependency. Almost nothing produces them
@@ -497,7 +503,7 @@ limit, and how to report something privately.
 npm test
 ```
 
-408 tests covering the invariants, not just the happy path: that AI cannot
+415 tests covering the invariants, not just the happy path: that AI cannot
 overwrite your edges, that a stale proposal is refused at accept time, that
 memory survives the total loss of every intelligence provider, that superseded
 pricing never appears as current, that two devices editing the same note raises

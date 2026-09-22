@@ -35,7 +35,9 @@ export function parseSource(input) {
   // that looks like text is worse than an honest failure.
   if (input.bytes?.length) {
     if (mediaType === 'application/pdf' || looksLikePdf(input.bytes)) {
-      const pdf = extractPdfText(input.bytes);
+      // A PDF whose *user* password is set needs it supplied. Most
+      // encrypted PDFs do not have one, so this is usually absent.
+      const pdf = extractPdfText(input.bytes, { password: input.password });
       return {
         text: pdf.text,
         title: pdf.meta.title ?? null,
