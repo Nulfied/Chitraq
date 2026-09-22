@@ -11,3 +11,14 @@
 # runner and nowhere else. Saying "these are bytes" costs two lines.
 test/fixtures/ccitt/*.bin       binary
 test/fixtures/ccitt/*.expected  binary
+
+# PDFs are binary and git does not reliably think so. Four of the eight
+# fixtures below were classified as text, and a clone with core.autocrlf=true
+# was measured corrupting plain.pdf — every 0x0A rewritten to 0x0D 0x0A,
+# which shifts every xref offset and, in an encrypted file, changes the
+# ciphertext.
+#
+# The tests happened to still pass on the corrupted copy, which is worse than
+# failing: it means the damage was invisible and one regenerated fixture away
+# from being real.
+test/fixtures/pdf-crypt/*.pdf  binary
