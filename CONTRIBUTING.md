@@ -8,7 +8,7 @@ change you spend time on is a change that can be merged.
 ```bash
 git clone <this repo>
 cd chitraq
-npm test          # 429 tests, no install step — there are no dependencies
+npm test          # 435 tests, no install step — there are no dependencies
 npm start         # http://127.0.0.1:4317
 ```
 

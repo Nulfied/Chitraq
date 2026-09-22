@@ -338,6 +338,9 @@ export function openAiCompatibleProvider(opts = {}) {
         // Rated well above the pattern-based floor's 0.4: finding people
         // and organisations is exactly what patterns cannot do.
         'extract.entities': { quality: 0.8, latencyMs: 2000, costMicros: cost === 'free' ? 0 : 250 },
+        // Reads a sample of the corpus, so it costs more per call than
+        // anything else here and is run on demand rather than on capture.
+        'concepts.propose': { quality: 0.78, latencyMs: 4000, costMicros: cost === 'free' ? 0 : 900 },
       },
       }),
     },

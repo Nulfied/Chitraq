@@ -34,6 +34,7 @@
  */
 
 import { Capability } from '../registry.js';
+import { classifySentence } from './deterministic.js';
 
 /**
  * @typedef {(req: {system: string, user: string, schema: object, think?: boolean}) => Promise<any>} Ask
@@ -48,6 +49,7 @@ const DEFAULT_TUNING = {
   [Capability.ProposeRelations]: { quality: 0.88, latencyMs: 2500, costMicros: 1500 },
   [Capability.InterpretQuery]: { quality: 0.85, latencyMs: 1500, costMicros: 600 },
   [Capability.ExtractEntities]: { quality: 0.85, latencyMs: 2500, costMicros: 1200 },
+  [Capability.ProposeConcepts]: { quality: 0.8, latencyMs: 4000, costMicros: 2500 },
 };
 
 /**
@@ -85,19 +87,39 @@ export function groundedCapabilities({ ask, tuning = {} }) {
     [Capability.ExtractClaims]: {
       ...spec(Capability.ExtractClaims),
       run: async (/** @type {any} */ task) => {
+        // Ask only for the sentences, and derive the rest.
+        //
+        // This used to request kind, epistemic and confidence per claim, and
+        // a real import produced 402 of 460 proposals at exactly 0.4 — a
+        // model emitting its default rather than judging. That is not a
+        // signal, and worse, it looks like one: `--accept-above` sorted
+        // nothing because every claim had the same score.
+        //
+        // The Ollama adapter was fixed to stop asking and this file was not,
+        // so the two paths disagreed about how a claim gets scored depending
+        // on which provider happened to serve it. Now both derive it from
+        // properties that can be checked: the kind of statement, whether it
+        // cites a figure, whether it opens with a pronoun and so cannot
+        // stand alone, and its length.
+        //
+        // It costs fewer output tokens too, which on a metered provider is
+        // the bill and on a slow one is the wait.
         const result = await ask({
           system: EXTRACT_SYSTEM,
           user: `Source title: ${task.title ?? '(untitled)'}\n\n---\n${task.text}\n---`,
           schema: CLAIMS_SCHEMA,
         });
+
         return {
-          claims: (result.claims ?? []).slice(0, task.limit ?? 20).map((/** @type {any} */ c) => ({
-            text: c.text,
-            kind: c.kind ?? 'note',
-            epistemic: c.epistemic ?? 'observation',
-            confidence: clamp(c.confidence),
-            offset: typeof c.offset === 'number' ? c.offset : 0,
-          })),
+          claims: (result.claims ?? [])
+            .map((/** @type {any} */ c) => String(typeof c === 'string' ? c : (c?.text ?? '')).trim())
+            .filter((/** @type {string} */ text) => text.length > 10)
+            .slice(0, task.limit ?? 20)
+            .map((/** @type {string} */ text) => ({
+              text,
+              ...classifySentence(text, /\?\s*$/.test(text)),
+              offset: 0,
+            })),
           uncertainty: result.uncertainty ?? null,
         };
       },
@@ -192,6 +214,62 @@ export function groundedCapabilities({ ask, tuning = {} }) {
       },
     },
 
+    [Capability.ProposeConcepts]: {
+      ...spec(Capability.ProposeConcepts),
+      run: async (/** @type {any} */ task) => {
+        /** @type {Array<{id: string, text: string}>} */
+        const claims = task.claims ?? [];
+        if (claims.length < 3) return { concepts: [] };
+
+        const numbered = claims
+          .map((c, i) => `[${i + 1}] ${c.text}`)
+          .join('\n');
+
+        const result = await ask({
+          system: CONCEPTS_SYSTEM,
+          user: `Notes:\n\n${numbered}\n\nWhat ideas run through these?`,
+          schema: CONCEPTS_SCHEMA,
+        });
+
+        const seen = new Set();
+        return {
+          concepts: (result.concepts ?? [])
+            .map((/** @type {any} */ c) => {
+              // A citation that does not point at a supplied note is the
+              // failure that matters here. Everything else is a phrase a
+              // person can judge; an invented support is a phrase that looks
+              // judged and is not.
+              const support = (c.supports ?? [])
+                .map((/** @type {any} */ n) => claims[Number(n) - 1])
+                .filter(Boolean);
+
+              return {
+                phrase: String(c.phrase ?? '').trim(),
+                because: String(c.because ?? '').trim(),
+                documents: support.length,
+                occurrences: support.length,
+                supportIds: support.map((/** @type {any} */ s) => s.id),
+                confidence: clamp(c.confidence) ?? 0.5,
+              };
+            })
+            .filter((/** @type {any} */ c) => {
+              if (!c.phrase || c.phrase.length < 3) return false;
+              // An idea you hold shows up in more than one note. One
+              // mention is a remark.
+              if (c.supportIds.length < 2) return false;
+              const key = c.phrase.toLowerCase();
+              if (seen.has(key)) return false;
+              seen.add(key);
+              return true;
+            })
+            .slice(0, task.limit ?? 12),
+          uncertainty:
+            'Proposed by a model reading a sample of your notes. Each one names ' +
+            'the notes it came from; any that cited nothing real was dropped.',
+        };
+      },
+    },
+
     [Capability.InterpretQuery]: {
       ...spec(Capability.InterpretQuery),
       run: async (/** @type {any} */ task) => {
@@ -267,32 +345,21 @@ Each unit must:
 
 Do not extract pleasantries, headings, navigation or restatements of the same point. Ten good units beat forty weak ones. If the text contains nothing worth remembering, return an empty list.`;
 
+/**
+ * Sentences only.
+ *
+ * The labels are not asked for. A model emits a default confidence rather
+ * than judging — measured at 402 of 460 proposals sharing one value — and
+ * every field requested is output tokens paid for on a metered provider and
+ * waited for on a slow one. The model does the part it is genuinely better
+ * at, which is deciding where a claim starts and stops.
+ */
 export const CLAIMS_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   required: ['claims'],
   properties: {
-    claims: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['text', 'kind', 'epistemic', 'confidence'],
-        properties: {
-          text: { type: 'string' },
-          kind: {
-            type: 'string',
-            enum: ['note', 'fact', 'concept', 'decision', 'observation', 'question', 'hypothesis', 'lesson', 'event', 'task'],
-          },
-          epistemic: {
-            type: 'string',
-            enum: ['fact', 'observation', 'belief', 'hypothesis', 'inference', 'conclusion', 'speculation'],
-          },
-          confidence: { type: 'number' },
-          offset: { type: 'integer' },
-        },
-      },
-    },
+    claims: { type: 'array', items: { type: 'string' } },
     uncertainty: { type: 'string' },
   },
 };
@@ -401,6 +468,42 @@ export const ENTITIES_SCHEMA = {
         properties: {
           text: { type: 'string', description: 'the exact span from the text' },
           type: { type: 'string', enum: ENTITY_TYPES },
+          confidence: { type: 'number' },
+        },
+      },
+    },
+  },
+};
+
+export const CONCEPTS_SYSTEM = `Name the ideas that run through these notes.
+
+A concept is something the writer keeps coming back to — a principle they apply, a constraint they work under, a tension they return to. It is not a topic word, not a product name, and not a phrase that merely appears often.
+
+Rules:
+- Cite the numbered notes each idea comes from. An idea worth naming shows up in at least two.
+- Say it in the writer's own vocabulary where you can. You are naming what is there, not teaching them a term.
+- A concept nobody could act on or disagree with is not worth proposing. "software development" is not an idea.
+- Prefer four good ones to twenty weak ones. If these notes share no idea, return an empty list — that is a correct answer for a scattered corpus.`;
+
+export const CONCEPTS_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['concepts'],
+  properties: {
+    concepts: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['phrase', 'because', 'supports', 'confidence'],
+        properties: {
+          phrase: { type: 'string', description: 'the idea, named briefly' },
+          because: { type: 'string', description: 'why these notes share it' },
+          supports: {
+            type: 'array',
+            items: { type: 'integer' },
+            description: 'the bracketed numbers of the notes it came from',
+          },
           confidence: { type: 'number' },
         },
       },

@@ -5,7 +5,7 @@ What is actually built, what is partial, and what is deliberately not built.
 States: **IMPLEMENTED** (built and tested), **PARTIAL** (works, with a stated
 limit), **NOT BUILT** (deliberately deferred).
 
-Last updated: 2026-09-20. 429 tests passing.
+Last updated: 2026-09-20. 435 tests passing.
 
 ---
 
@@ -427,6 +427,14 @@ says otherwise.
    pronoun, and its length. On the same documents that gave one value, it
    now gives fourteen, and `--accept-above` is a real control. It sorts by
    whether a claim is *usable*, which is not a judgement about truth.
+
+   That fix had been applied to the Ollama adapter and not to the shared
+   path, so until now a claim's score depended on which provider happened to
+   serve it — Claude and every hosted model were still being asked for a
+   number, which is the thing this entry says does not work. Both derive it
+   now. The schema asks for sentences and nothing else, which also stops
+   paying for label tokens on a metered provider and waiting for them on a
+   slow one.
 5. **Contradiction detection is narrow.** Conflicting figures about the same
    subject, and negated restatements. It misses most real contradictions, and
    is tuned for precision because a false "these disagree" is expensive to
@@ -496,6 +504,23 @@ says otherwise.
    across separate notes, which is honest but shallow: it finds phrases you
    repeat, not ideas you hold. Everything it produces is a proposal, and
    confidence is capped well below the shape-based kinds.
+
+   A model can now name the idea instead, where one is configured. That is
+   allowed only because it is checkable: every proposal must cite the
+   numbered notes it came from, those are resolved back to real object ids,
+   and anything citing a note that was not supplied is dropped. An idea
+   nobody wrote down twice is a remark, so two supports are the minimum.
+   Model-named concepts are capped at 0.55 — naming an idea is a suggestion
+   about meaning, while the same words appearing in six separate notes is
+   evidence, and the confidence should say which is which.
+
+   The grounding check is the whole reason this is permitted. A concept
+   becomes a node in the graph, and a wrong one has to be found and merged
+   away by hand, so a model that invents a plausible-sounding theme is worse
+   than one that finds nothing.
+
+   With nothing configured this changes nothing: recurrence is still the
+   whole story, and still shallow.
 10. **An unlocked vault lives in process memory.** Something that can read this
    process can read the data key. Defending against that is a different order
    of problem and is not attempted.

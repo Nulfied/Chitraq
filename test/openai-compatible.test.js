@@ -113,33 +113,50 @@ test('an ungrounded answer returns null rather than the model\'s guess', async (
   assert.match(out.uncertainty, /nothing about Redis/);
 });
 
-test('confidence outside 0..1 is clamped rather than trusted', async () => {
+test('confidence is derived here, not taken from the model', async () => {
+  // A real import once produced 402 of 460 proposals at exactly 0.4 — a
+  // model emitting its default rather than judging. That is not a signal,
+  // and it looks like one: `--accept-above` sorted nothing.
+  //
+  // So the model is asked only for the sentences, and the score comes from
+  // what can be checked. Same five sentences, five different scores.
   const fetchImpl = stubFetch([
     {
       body: {
         claims: [
-          { text: 'A', kind: 'fact', epistemic: 'fact', confidence: 4 },
-          { text: 'B', kind: 'note', epistemic: 'belief', confidence: -2 },
-          { text: 'C', kind: 'note', epistemic: 'belief', confidence: 'nonsense' },
+          'We chose SQLite because it needs no server to run.',
+          'It was slower than expected.',
+          'The p99 latency was measured at 38ms across 1000 requests.',
+          'Retention is set to 30 days for every workspace and cannot be changed per workspace.',
         ],
       },
     },
   ]);
 
   const out = await provider(fetchImpl).capabilities[Capability.ExtractClaims].run({ text: 'x' });
-  assert.deepEqual(
-    out.claims.map((/** @type {any} */ c) => c.confidence),
-    [1, 0, null]
+  const scores = out.claims.map((/** @type {any} */ c) => c.confidence);
+
+  assert.equal(new Set(scores).size, scores.length, 'every claim scored differently');
+  assert.ok(
+    scores.every((/** @type {number} */ n) => n > 0 && n < 1),
+    'and all within bounds'
   );
+
+  // The one that opens with a pronoun and says nothing checkable should be
+  // the weakest — that is the whole point of deriving it.
+  const weakest = out.claims.reduce((/** @type {any} */ a, /** @type {any} */ b) =>
+    a.confidence <= b.confidence ? a : b
+  );
+  assert.match(weakest.text, /^It was slower/);
+
+  // And the schema no longer asks for the labels at all, which is fewer
+  // output tokens on every provider.
+  const asked = JSON.stringify(fetchImpl.calls[0].body.response_format);
+  assert.ok(!asked.includes('epistemic'), 'the model is not asked to label');
 });
 
 test('the claim limit is enforced here, not hoped for in the prompt', async () => {
-  const many = Array.from({ length: 50 }, (_, i) => ({
-    text: `claim ${i}`,
-    kind: 'note',
-    epistemic: 'observation',
-    confidence: 0.5,
-  }));
+  const many = Array.from({ length: 50 }, (_, i) => `This is claim number ${i} and it stands alone.`);
   const fetchImpl = stubFetch([{ body: { claims: many } }]);
 
   const out = await provider(fetchImpl).capabilities[Capability.ExtractClaims].run({

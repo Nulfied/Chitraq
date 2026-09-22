@@ -31,6 +31,8 @@ export const Capability = Object.freeze({
   Answer: 'answer',
   /** object pair -> proposed relationship. */
   ProposeRelations: 'relate.propose',
+  /** a sample of claims -> the ideas running through them. */
+  ProposeConcepts: 'concepts.propose',
   /** object pair -> contradiction assessment. */
   DetectConflict: 'detect.conflict',
   /** text -> object kind. */

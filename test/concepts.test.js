@@ -159,7 +159,7 @@ test('proposing a concept writes nothing until a human accepts', async (t) => {
     c.db.prepare("SELECT COUNT(*) n FROM object WHERE kind = 'entity'").get().n
   );
 
-  const result = c.proposeConcepts();
+  const result = await c.proposeConcepts();
   assert.ok(result.proposals.length >= 1);
   assert.equal(result.proposals[0].status, 'pending', 'never applied on its own');
 
@@ -186,12 +186,12 @@ test('a concept is suggested once, not every time it is looked for', async (t) =
     ['C', 'We kept the answer ladder in place.'],
   ]);
 
-  const first = c.proposeConcepts();
+  const first = await c.proposeConcepts();
   assert.ok(first.proposals.length >= 1);
 
   // Re-proposing what is already waiting is how a review queue becomes noise
   // nobody reads.
-  const second = c.proposeConcepts();
+  const second = await c.proposeConcepts();
   assert.equal(second.proposals.length, 0);
   assert.ok(second.found >= 1, 'still found, just not suggested again');
 });
@@ -206,10 +206,10 @@ test('a declined concept stays declined', async (t) => {
     ['C', 'We kept the answer ladder in place.'],
   ]);
 
-  const proposed = c.proposeConcepts();
+  const proposed = await c.proposeConcepts();
   await c.decline(proposed.proposals[0].id, 'not a thing I think in');
 
-  assert.equal(c.proposeConcepts().proposals.length, 0, 'no means no');
+  assert.equal((await c.proposeConcepts()).proposals.length, 0, 'no means no');
 });
 
 test('candidates read only active, non-entity knowledge', async (t) => {

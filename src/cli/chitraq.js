@@ -418,7 +418,7 @@ async function run(command, rest, flags, c) {
 
     case 'concepts': {
       if (flags.propose) {
-        const result = c.proposeConcepts({
+        const result = await c.proposeConcepts({
           minDocuments: flags.min ? Number(flags.min) : undefined,
         });
         console.log(`\n  ${result.found} recurring idea(s), ${result.proposals.length} newly suggested`);

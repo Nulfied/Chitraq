@@ -2220,6 +2220,65 @@ export class Chitraq {
   }
 
   /**
+   * Ideas a model finds in a sample of the notes.
+   *
+   * Recurrence finds phrases you repeat. That is honest and it is shallow:
+   * a corpus where the same idea is expressed in different words each time
+   * yields nothing at all, and the strongest "concept" on a real corpus was
+   * once a URL, because a repeated link tokenises into repeated words.
+   *
+   * This asks a model instead — and then checks it. Every proposal has to
+   * name the notes it came from, those numbers are resolved back to real
+   * object ids, and anything citing a note that was not supplied is dropped.
+   * An idea nobody wrote down twice is a remark, so two supports are the
+   * minimum. That check is the whole reason this is allowed to run: a
+   * concept is a node in the graph, and a wrong one has to be found and
+   * merged away by hand.
+   *
+   * @param {{limit?: number, sample?: number}} opts
+   */
+  async #conceptsFromModel(opts = {}) {
+    if (!this.registry.supporting(Capability.ProposeConcepts).length) return [];
+
+    // A sample, not the corpus. The point is to see the shape of what
+    // somebody writes about, and sending everything would cost a fortune on
+    // a metered provider to say the same thing.
+    const rows = this.db
+      .prepare(
+        `SELECT id, title, body FROM object
+         WHERE workspace_id = ? AND state = 'active' AND deleted_at IS NULL
+           AND superseded_by IS NULL AND kind != 'entity'
+         ORDER BY updated_at DESC LIMIT ?`
+      )
+      .all(this.workspaceId, opts.sample ?? 120);
+    if (rows.length < 3) return [];
+
+    const claims = rows.map((r) => ({
+      id: r.id,
+      text: `${r.title ?? ''} ${r.body ?? ''}`.trim().slice(0, 300),
+    }));
+
+    const run = await this.router.tryRun(
+      Capability.ProposeConcepts,
+      { claims, limit: opts.limit ?? 12 },
+      { workspaceId: this.workspaceId }
+    );
+
+    return (run?.result?.concepts ?? []).map((/** @type {any} */ c) => ({
+      phrase: c.phrase,
+      // Capped below the recurrence-based kinds. A model naming an idea is
+      // a suggestion about meaning, which is softer evidence than the same
+      // words appearing in six separate notes.
+      confidence: Math.min(0.55, c.confidence ?? 0.5),
+      because: c.because,
+      documents: c.documents,
+      occurrences: c.occurrences,
+      supportIds: c.supportIds,
+      viaModel: true,
+    }));
+  }
+
+  /**
    * Turn recurring phrases into proposals a human can accept or decline.
    *
    * This is the only route from a phrase to an entity, and it runs through the
@@ -2228,8 +2287,8 @@ export class Chitraq {
    *
    * @param {{minDocuments?: number, limit?: number}} [opts]
    */
-  proposeConcepts(opts = {}) {
-    const found = this.concepts(opts);
+  async proposeConcepts(opts = {}) {
+    const found = [...this.concepts(opts), ...(await this.#conceptsFromModel(opts))];
     /** @type {any[]} */
     const proposals = [];
 
