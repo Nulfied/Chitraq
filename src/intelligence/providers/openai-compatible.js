@@ -335,6 +335,9 @@ export function openAiCompatibleProvider(opts = {}) {
         'detect.conflict': { quality: 0.78, latencyMs: 2000, costMicros: cost === 'free' ? 0 : 250 },
         'relate.propose': { quality: 0.76, latencyMs: 2000, costMicros: cost === 'free' ? 0 : 250 },
         'interpret.query': { quality: 0.78, latencyMs: 1200, costMicros: cost === 'free' ? 0 : 100 },
+        // Rated well above the pattern-based floor's 0.4: finding people
+        // and organisations is exactly what patterns cannot do.
+        'extract.entities': { quality: 0.8, latencyMs: 2000, costMicros: cost === 'free' ? 0 : 250 },
       },
       }),
     },

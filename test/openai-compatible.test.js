@@ -347,6 +347,65 @@ test('a short embedding response is an error, not a silent misalignment', async 
   );
 });
 
+test('a model finds the names patterns cannot, and offsets point at them', async () => {
+  // Weakness 8: the pattern-based floor is precise and sparse. On real
+  // documentation it found four entities where a person would see a dozen,
+  // because people and organisations have no shape a regex can match.
+  const text = 'Vinod met Priya at Infosys in Bengaluru on 2026-03-04 about the Atlas migration.';
+  const fetchImpl = stubFetch([
+    {
+      body: {
+        entities: [
+          { text: 'Vinod', type: 'name', confidence: 0.9 },
+          { text: 'Infosys', type: 'organisation', confidence: 0.95 },
+          { text: 'Atlas migration', type: 'project', confidence: 0.8 },
+        ],
+      },
+    },
+  ]);
+
+  const out = await provider(fetchImpl).capabilities['extract.entities'].run({ text });
+  assert.deepEqual(
+    out.entities.map((/** @type {any} */ e) => `${e.type}:${e.text}`),
+    ['name:Vinod', 'organisation:Infosys', 'project:Atlas migration']
+  );
+
+  // The offset is computed here, not taken from the model. Asked for one, a
+  // model produces a plausible integer that is usually wrong — and the
+  // offset is what makes an entity point back at the words it came from.
+  for (const entity of out.entities) {
+    assert.equal(text.slice(entity.offset, entity.offset + entity.text.length), entity.text);
+  }
+});
+
+test('an invented entity type is dropped rather than stored', async () => {
+  // A value is not an entity: `entityTypeFor` discards dates and money on
+  // the way in, so accepting them here would spend tokens producing things
+  // the next function throws away — and an unknown type would reach the
+  // graph as an entity of no kind at all.
+  const fetchImpl = stubFetch([
+    {
+      body: {
+        entities: [
+          { text: 'Priya', type: 'name', confidence: 0.9 },
+          { text: '2026-03-04', type: 'date', confidence: 0.99 },
+          { text: '40%', type: 'percentage', confidence: 0.9 },
+          { text: 'X', type: 'name', confidence: 0.9 },
+        ],
+      },
+    },
+  ]);
+
+  const out = await provider(fetchImpl).capabilities['extract.entities'].run({
+    text: 'Priya on 2026-03-04 saw 40% and X.',
+  });
+  assert.deepEqual(
+    out.entities.map((/** @type {any} */ e) => e.text),
+    ['Priya'],
+    'the date, the percentage and the single letter are all gone'
+  );
+});
+
 test('a free-tier embedder is free and remote, so it needs one gate only', () => {
   const gemini = openAiCompatibleProvider({ preset: 'gemini', apiKey: 'k' });
   assert.equal(gemini.capabilities['embed.text'].costMicros, 0);

@@ -3,7 +3,7 @@
  *
  * This is the whole of Chitraq's use of a language model, with the vendor
  * taken out. A provider supplies one function — `ask({system, user, schema})`
- * returning parsed JSON — and gets the six capabilities back, prompts,
+ * returning parsed JSON — and gets every model-backed capability back,
  * schemas, clamping and all.
  *
  * It was extracted from the Claude adapter, and the reason is worth writing
@@ -47,10 +47,11 @@ const DEFAULT_TUNING = {
   [Capability.DetectConflict]: { quality: 0.9, latencyMs: 2500, costMicros: 1500 },
   [Capability.ProposeRelations]: { quality: 0.88, latencyMs: 2500, costMicros: 1500 },
   [Capability.InterpretQuery]: { quality: 0.85, latencyMs: 1500, costMicros: 600 },
+  [Capability.ExtractEntities]: { quality: 0.85, latencyMs: 2500, costMicros: 1200 },
 };
 
 /**
- * The six capabilities a general model can serve, built around one `ask`.
+ * The capabilities a general model can serve, built around one `ask`.
  *
  * @param {{ask: Ask, tuning?: Record<string, {quality?: number, latencyMs?: number, costMicros?: number}>}} opts
  * @returns {Record<string, any>}
@@ -155,6 +156,38 @@ export function groundedCapabilities({ ask, tuning = {} }) {
             confidence: clamp(r.confidence) ?? 0.5,
             rationale: r.rationale,
           })),
+        };
+      },
+    },
+
+    [Capability.ExtractEntities]: {
+      ...spec(Capability.ExtractEntities),
+      run: async (/** @type {any} */ task) => {
+        const result = await ask({
+          system: ENTITIES_SYSTEM,
+          user: String(task.text ?? ''),
+          schema: ENTITIES_SCHEMA,
+        });
+
+        const text = String(task.text ?? '');
+        return {
+          entities: (result.entities ?? [])
+            .filter((/** @type {any} */ e) => e?.text && ENTITY_TYPES.includes(e.type))
+            .map((/** @type {any} */ e) => ({
+              text: String(e.text).trim(),
+              type: e.type,
+              confidence: clamp(e.confidence) ?? 0.6,
+              // The offset is computed here rather than taken from the model.
+              // Asked for one, models produce a plausible integer that is
+              // usually wrong, and the offset is what makes an entity point
+              // back at the words it came from.
+              offset: Math.max(0, text.indexOf(String(e.text))),
+            }))
+            .filter((/** @type {any} */ e) => e.text.length > 1),
+          uncertainty:
+            'Read by a model. It finds names the pattern-based floor cannot — ' +
+            'people and organisations especially — and will occasionally invent ' +
+            'a type or promote a passing mention. Everything here is a proposal.',
         };
       },
     },
@@ -320,6 +353,55 @@ export const RELATIONS_SCHEMA = {
           type: { type: 'string', enum: RELATION_TYPES },
           confidence: { type: 'number' },
           rationale: { type: 'string' },
+        },
+      },
+    },
+  },
+};
+
+/**
+ * The types an entity may have.
+ *
+ * Deliberately not the full extraction vocabulary. Dates, money and
+ * percentages are *values*, and `entityTypeFor` drops them on the way in —
+ * making every "40%" a node would swamp the graph. Asking the model for them
+ * would spend tokens producing things the next function discards.
+ */
+export const ENTITY_TYPES = [
+  'name',
+  'organisation',
+  'place',
+  'product',
+  'project',
+  'concept',
+  'identifier',
+];
+
+export const ENTITIES_SYSTEM = `Find the named things in the text: people, organisations, places, products, projects, and identifiers such as ticket or model numbers.
+
+Rules:
+- Use the exact span as it appears. Do not expand abbreviations, correct spelling, or resolve pronouns.
+- A title-cased phrase is not automatically a name. Headings, section labels and ordinary nouns that happen to be capitalised are not entities.
+- \`name\` means a person. An organisation is not a person, and a product named after its founder is a product.
+- Prefer missing a doubtful one to inventing a confident one. Ten real entities beat forty guesses.
+- Give an honest confidence. These become proposals a human reviews, not facts.
+- If the text names nothing, return an empty list. That is a correct answer.`;
+
+export const ENTITIES_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['entities'],
+  properties: {
+    entities: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['text', 'type', 'confidence'],
+        properties: {
+          text: { type: 'string', description: 'the exact span from the text' },
+          type: { type: 'string', enum: ENTITY_TYPES },
+          confidence: { type: 'number' },
         },
       },
     },

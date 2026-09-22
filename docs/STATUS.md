@@ -5,7 +5,7 @@ What is actually built, what is partial, and what is deliberately not built.
 States: **IMPLEMENTED** (built and tested), **PARTIAL** (works, with a stated
 limit), **NOT BUILT** (deliberately deferred).
 
-Last updated: 2026-09-20. 422 tests passing.
+Last updated: 2026-09-20. 424 tests passing.
 
 ---
 
@@ -448,8 +448,25 @@ says otherwise.
    null Gate 2 outcome" is not a product; paths and code are stripped before
    names are looked for — took it to 33 → 12 → 8 → **4, all four correct**
    (`MSVC`, `Node`, `Windows`, `Halka`). Precise now, and sparse: it finds
-   what has an unambiguous shape and misses the rest. A model would find
-   more.
+   what has an unambiguous shape and misses the rest.
+
+   This entry used to end "a model would find more" and leave it there.
+   There is now a path for that: `extract.entities` is served by any
+   configured model, including the free tiers, and finds the two kinds
+   patterns cannot — people and organisations have no shape a regex can
+   match. On one sentence the floor found `Bengaluru`, `Node` and `Atlas`;
+   the model path adds `Vinod`, `Priya` and `Infosys`.
+
+   Two things are decided here rather than asked for. The offset is computed
+   by searching the text, because a model asked for one produces a plausible
+   integer that is usually wrong, and the offset is what makes an entity
+   point back at the words it came from. And the type must be one of seven —
+   dates, money and percentages are values, not entities, and `entityTypeFor`
+   drops them anyway, so asking for them would spend tokens on things the
+   next function discards.
+
+   The floor is still what runs with nothing configured, and is still
+   precise and sparse.
 9. **Concepts find phrases you repeat, not ideas you hold.** On a real
    corpus the first run's strongest "concept" was `https github com nulfied`
    — a URL tokenises into ordinary words, so a repeated link reads as a
