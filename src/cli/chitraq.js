@@ -15,6 +15,8 @@ import { isRemoteHost } from '../core/sync-http.js';
 import { Chitraq } from '../chitraq.js';
 import { loadConfig } from '../config.js';
 import { runSetup } from './setup.js';
+import * as daemon from '../core/daemon.js';
+import { spawn } from 'node:child_process';
 import { render } from '../context/builder.js';
 
 const COMMANDS = {
@@ -37,7 +39,7 @@ const COMMANDS = {
   entities: { args: '', help: 'People, places, products and projects found in your notes.' },
   merge: { args: '<keepId> <mergeId>', help: 'Merge two entities into one.' },
   concepts: { args: '', help: 'Ideas that recur across your notes. --propose to suggest them.' },
-  watch: { args: '<folder>', help: 'Capture changes to a folder as they happen. Ctrl-C to stop.' },
+  watch: { args: '<folder>', help: 'Capture changes to a folder as they happen. --background to detach.' },
   notices: { args: '', help: 'Things worth knowing without asking.' },
   costs: { args: '', help: 'What intelligence has cost, by provider and capability.' },
   import: { args: '<file>', help: 'Import a Chitraq export into this memory.' },
@@ -232,13 +234,26 @@ async function run(command, rest, flags, c) {
         console.log(`\n  Sending knowledge from this memory to ${url}.`);
       }
 
-      const report = await c.syncOverHttp(url, {
+      const syncOptions = {
         token: flags.token,
         direction,
         dryRun: !!flags['dry-run'],
         limit: flags.limit ? Number(flags.limit) : undefined,
         timeoutMs: flags.timeout ? Number(flags.timeout) : undefined,
-      });
+      };
+
+      // `--every 10m` makes this a schedule rather than one exchange. Parsed
+      // before anything is sent, so a typo fails immediately instead of
+      // after the first sync has already moved data.
+      const repeatEvery = daemon.duration(flags.every);
+      if (flags.every !== undefined && repeatEvery === null) {
+        throw new Error(`"${flags.every}" is not an interval. Try 10m, 2h, or 45s.`);
+      }
+      if (repeatEvery !== null && syncOptions.dryRun) {
+        throw new Error('--dry-run and --every together would repeat doing nothing.');
+      }
+
+      const report = await c.syncOverHttp(url, syncOptions);
 
       console.log(`\n  peer        ${report.peer.id}`);
       console.log(`  at          ${report.peer.url}`);
@@ -267,6 +282,36 @@ async function run(command, rest, flags, c) {
         console.log(`\n  This moved one batch, not everything. Run the same command again.`);
       }
       console.log('');
+
+      // `--every` turns one exchange into a schedule. The first one has
+      // already happened above, so this waits before repeating.
+      if (repeatEvery) {
+        const record = daemon.recordPath(flags.db ?? loadConfig().path, 'sync');
+        const stopHeartbeat = daemon.heartbeat(record);
+
+        await new Promise((resolve) => {
+          const finish = () => resolve(undefined);
+          process.on('SIGINT', finish);
+          process.on('SIGTERM', finish);
+
+          const tick = setInterval(async () => {
+            if (!daemon.stillOurs(record)) return finish();
+            try {
+              const again = await c.syncOverHttp(url, syncOptions);
+              console.log(`  ${stamp()}  pushed ${again.pushed}, pulled ${again.pulled}`);
+            } catch (err) {
+              // A peer that is asleep is the ordinary case for a laptop.
+              // Reporting and carrying on is right; exiting is not.
+              console.log(`  ${stamp()}  ${dim(String(err?.message ?? err))}`);
+            }
+          }, repeatEvery);
+          tick.unref?.();
+        });
+
+        stopHeartbeat();
+        if (daemon.stillOurs(record)) daemon.clearRecord(record);
+        console.log('');
+      }
       break;
     }
 
@@ -444,6 +489,21 @@ async function run(command, rest, flags, c) {
     }
 
     case 'watch': {
+      const storePath = flags.db ?? loadConfig().path;
+      const record = daemon.recordPath(storePath, 'watch');
+
+      if (flags.status) {
+        describeDaemon(daemon.state(daemon.readRecord(record)));
+        break;
+      }
+
+      if (flags.stop) {
+        const result = daemon.stop(record);
+        console.log(`\n  ${result.reason}\n`);
+        if (!result.stopped && result.pid) process.exitCode = 1;
+        break;
+      }
+
       const target = rest[0];
       if (!target) throw new Error('Give a folder to watch.');
 
@@ -456,6 +516,42 @@ async function run(command, rest, flags, c) {
         only: !!flags.only,
         extract: !flags['no-extract'],
       };
+
+      // Detaching re-runs this same command without the flag. Building the
+      // child's arguments from the parsed ones rather than reusing argv
+      // keeps `--background` from being passed down and looping forever.
+      if (flags.background) {
+        const claimed = daemon.claim(record, { kind: 'watch', target }, {});
+        if (!claimed.ok) {
+          console.log(`\n  ${claimed.reason}\n`);
+          process.exitCode = 1;
+          break;
+        }
+        // Claimed on behalf of a child that does not exist yet, so it is
+        // released immediately: the child claims it properly on startup, and
+        // a failed spawn must not leave a record nothing can clear.
+        daemon.clearRecord(record);
+
+        const child = spawn(
+          process.execPath,
+          [process.argv[1], 'watch', target, ...backgroundArgs(flags)],
+          { detached: true, stdio: 'ignore' }
+        );
+        child.unref();
+
+        console.log(`\n  watching    ${target} in the background (pid ${child.pid})`);
+        console.log(`  stop it     chitraq watch --stop`);
+        console.log(`  check it    chitraq watch --status\n`);
+        break;
+      }
+
+      const claimed = daemon.claim(record, { kind: 'watch', target }, {});
+      if (!claimed.ok) {
+        console.log(`\n  ${claimed.reason}\n`);
+        process.exitCode = 1;
+        break;
+      }
+      const stopHeartbeat = daemon.heartbeat(record);
 
       // Catch up first. A watcher that only notices changes made while it was
       // running leaves a gap nobody can see, and "why is yesterday's note
@@ -490,12 +586,29 @@ async function run(command, rest, flags, c) {
       });
 
       await new Promise((resolve) => {
-        process.on('SIGINT', () => {
+        const finish = () => {
           console.log(`\n\n  stopping\u2026 (${watcher.state().queued} still queued)`);
           watcher.stop();
           watcher.done.then(resolve);
-        });
+        };
+        process.on('SIGINT', finish);
+        process.on('SIGTERM', finish);
+
+        // Signals are unreliable on Windows, so `--stop` also works by taking
+        // the record away. Checking for that is how a detached watcher
+        // notices it has been asked to stand down.
+        const poll = setInterval(() => {
+          if (!daemon.stillOurs(record)) {
+            clearInterval(poll);
+            watcher.stop();
+            watcher.done.then(resolve);
+          }
+        }, 2000);
+        poll.unref?.();
       });
+
+      stopHeartbeat();
+      if (daemon.stillOurs(record)) daemon.clearRecord(record);
 
       const final = watcher.state();
       console.log(`  captured    ${final.captured} file(s) while watching\n`);
@@ -974,6 +1087,14 @@ function usage(code = 0) {
     --token <t>     a session token, if the other side requires a login
     --dry-run       report what would move, write nothing on either side
 
+  Options for 'watch'
+    --background    keep watching after the terminal closes
+    --stop          stop a background watcher
+    --status        say whether one is running
+
+  Options for 'sync'
+    --every <time>  keep exchanging on a schedule: 10m, 2h, 45s
+
   Options for ingesting a folder
     --no-extract    capture the text only; do not propose knowledge (much faster)
     --include <a,b> also capture these extensions, e.g. --include json,csv
@@ -1249,3 +1370,61 @@ function dim(s) {
 }
 
 main();
+
+/**
+ * What a background daemon's state looks like to a person.
+ *
+ * Not called `report`: two case blocks already declare `const report` for
+ * their own results, and a block-scoped const shadowing a module function is
+ * the kind of thing that works until somebody moves a line.
+ *
+ * @param {{status: string, record: any, silentFor?: number}} current
+ */
+function describeDaemon(current) {
+  if (current.status === 'none') {
+    console.log('\n  nothing running\n');
+    return;
+  }
+
+  const { record } = current;
+  console.log('');
+  console.log(`  status      ${current.status}`);
+  console.log(`  pid         ${record.pid}`);
+  console.log(`  watching    ${record.target}`);
+  console.log(`  since       ${record.startedAt}`);
+
+  if (current.status === 'foreign') {
+    // Said plainly, because the honest answer is "this record is worthless"
+    // rather than "something is wrong with your watcher".
+    console.log('');
+    console.log(`  That process is alive but has not checked in for`);
+    console.log(`  ${Math.round((current.silentFor ?? 0) / 1000)}s, so it is probably not Chitraq any`);
+    console.log(`  more — process ids get reused. Nothing will be signalled.`);
+  }
+  if (current.status === 'stale') {
+    console.log('');
+    console.log(`  It is no longer running. Start it again, or clear the`);
+    console.log(`  record with: chitraq watch --stop`);
+  }
+  console.log('');
+}
+
+/**
+ * The flags a detached child should inherit.
+ *
+ * Rebuilt from the parsed flags rather than copied from argv, so
+ * `--background` cannot be passed down — a child that re-detached would
+ * spawn forever.
+ *
+ * @param {Record<string, any>} flags
+ */
+function backgroundArgs(flags) {
+  /** @type {string[]} */
+  const args = [];
+  for (const name of ['no-recursive', 'only', 'no-extract']) {
+    if (flags[name]) args.push(`--${name}`);
+  }
+  if (flags.include) args.push('--include', String(flags.include));
+  if (flags.db) args.push('--db', String(flags.db));
+  return args;
+}

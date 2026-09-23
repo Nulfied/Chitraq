@@ -5,7 +5,7 @@ What is actually built, what is partial, and what is deliberately not built.
 States: **IMPLEMENTED** (built and tested), **PARTIAL** (works, with a stated
 limit), **NOT BUILT** (deliberately deferred).
 
-Last updated: 2026-09-20. 435 tests passing.
+Last updated: 2026-09-20. 449 tests passing.
 
 ---
 
@@ -458,9 +458,27 @@ says otherwise.
    Still narrow. It compares figures and negations, not meaning.
 6. **Concurrency is SQLite WAL and nothing more.** Fine for one user and one
    process. A multi-user server needs work not yet done.
-7. **Nothing watches anything unless you start it.** `chitraq watch` is a
-   foreground command that dies with the terminal. Sync has no watch mode at
-   all, and there is still no timer, no service and no background exchange.
+7. **Nothing runs unless you start it, and it now keeps running.**
+   `chitraq watch --background` detaches and survives the terminal, with
+   `--stop` and `--status` to manage it. `chitraq sync <url> --every 10m`
+   turns one exchange into a schedule. Both behave the same on Linux, macOS
+   and Windows, because neither installs anything: a detached child process
+   and a small record beside the store, which goes away when you stop it.
+
+   No service is installed, deliberately. A systemd unit, a launchd plist
+   and a Task Scheduler entry are three implementations of one idea, each
+   wanting privileges and each leaving something on the machine that
+   `chitraq` did not put there and cannot reliably remove. The honest cost
+   is that none of this survives a reboot — start it again, or write your
+   own unit file pointing at the foreground command.
+
+   The part worth knowing about is `--stop`. Process ids are reused, so a
+   recorded pid being alive is not evidence it is ours; an hour later that
+   number can belong to the editor somebody is working in. The record
+   carries a heartbeat, and anything alive but silent is treated as a
+   stranger and never signalled. That costs a daemon killed outright one
+   interval before its record is recognised as stale. The alternative costs
+   somebody their unsaved work, which is not a trade.
 8. **Entity extraction is sparse on technical documentation.** Measured on a
    real corpus of 27 project documents: the first run produced 33 entities of
    which about four were real, because documentation is nothing but Title

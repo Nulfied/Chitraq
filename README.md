@@ -19,7 +19,7 @@ account to create and no API bill.
 ```bash
 git clone https://github.com/Nulfied/Chitraq
 cd chitraq
-npm test                                     # 435 tests, no install step
+npm test                                     # 449 tests, no install step
 
 node scripts/seed.js demo/memory.chitraq     # build a demo memory
 node src/server/serve.js --db demo/memory.chitraq
@@ -407,10 +407,31 @@ what did is the thing you want most.
 chitraq watch ~/Documents/notes
 ```
 
-Captures changes as you make them, printing each one. It runs in the
-foreground, installs nothing, and stops with the terminal — the thing Chitraq
-avoids is *implicit* work, not convenience. It catches up on whatever changed
-while it was away before it starts.
+Captures changes as you make them, printing each one. It catches up on
+whatever changed while it was away before it starts.
+
+To keep watching after you close the terminal:
+
+```bash
+chitraq watch ~/Documents/notes --background
+chitraq watch --status
+chitraq watch --stop
+```
+
+And to keep two machines in step on a schedule:
+
+```bash
+chitraq sync http://192.168.1.20:4317 --every 10m
+```
+
+Neither installs a service. A background watcher is a detached process and a
+small record beside your memory, which goes away when you stop it — so it
+does not survive a reboot, and starting it again is the price of not leaving
+anything on your machine that Chitraq cannot reliably remove.
+
+`--stop` will not signal a process that has stopped checking in. Process ids
+get reused, and a recorded one being alive is not evidence it is still
+Chitraq rather than something you were working in.
 
 ---
 
@@ -511,7 +532,7 @@ limit, and how to report something privately.
 npm test
 ```
 
-435 tests covering the invariants, not just the happy path: that AI cannot
+449 tests covering the invariants, not just the happy path: that AI cannot
 overwrite your edges, that a stale proposal is refused at accept time, that
 memory survives the total loss of every intelligence provider, that superseded
 pricing never appears as current, that two devices editing the same note raises
