@@ -12,3 +12,7 @@ test-output.txt
 
 # Throwaway CCITT fuzz corpus (tools/make-ccitt-fixtures.py --fuzz)
 .ccitt-fuzz/
+
+# Seeded demo memory, for looking at the interface with something in it.
+# `node scripts/seed.js demo/memory.chitraq` rebuilds it.
+demo/

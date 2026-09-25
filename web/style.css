@@ -287,6 +287,116 @@ button.btn:disabled { opacity: 0.5; cursor: default; }
   border-style: dashed;
   border-color: var(--ai);
   background: linear-gradient(0deg, var(--ai-soft), var(--ai-soft)) padding-box;
+  padding: 16px 18px;
+  /* The provenance colour arrives as an edge, not a wash. A queue is read as
+     a column of ten or a hundred, and ten saturated blocks is a page that is
+     tiring before it is informative. The border and the badge say the same
+     thing at a tenth of the weight. */
+  border-left-width: 3px;
+  border-left-style: solid;
+}
+
+/* Which kind of thing suggested this, in the colour the palette already
+   reserves for it. Every proposal used to render the same cream, so the
+   distinction between "a pattern matched" and "a model decided" existed in
+   the stylesheet and nowhere a reader could see it. */
+.card.proposal.origin-algorithm {
+  border-color: var(--algo);
+  background: var(--surface);
+}
+
+.card.proposal.origin-ai {
+  border-color: var(--ai);
+}
+
+.card.proposal:focus-visible,
+.card.proposal.is-selected {
+  outline: none;
+  border-style: solid;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* The sentence being judged. Largest thing on the card, and first. */
+.card.proposal .claim {
+  font-size: 16px;
+  line-height: 1.45;
+  color: var(--text);
+  margin: 0 0 10px;
+}
+
+.proposal-signals {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+/* How sure the system is, as a shape rather than a number buried in a
+   sentence. This is what `--accept-above` sorts by, so it should be the
+   thing the eye lands on after the claim itself. */
+.confidence {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.confidence-track {
+  width: 56px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.confidence-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: currentColor;
+}
+
+.confidence-value {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: currentColor;
+}
+
+/* Three bands, not a gradient. The score is a sorting aid and a smooth ramp
+   would claim a precision it does not have. */
+.confidence.high { color: var(--user); }
+.confidence.mid { color: var(--ai); }
+.confidence.low { color: var(--text-3); }
+
+/* Where the provider name ended up: findable, not first. */
+.card.proposal .meta {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+/* The keyboard hint, and the shortcuts it names. */
+.shortcuts {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-3);
+  margin: 0 0 14px;
+}
+
+kbd {
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: var(--text-2);
 }
 
 .card.conflict { border-color: var(--warn); background: var(--warn-soft); }

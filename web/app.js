@@ -329,6 +329,7 @@ const views = {
 
     const list = h('div', {});
     list.replaceChildren(...pending.map((p) => proposalCard(p, list)));
+    reviewKeys(list);
 
     const bulk = async (action, minConfidence) => {
       const affected = minConfidence
@@ -365,11 +366,16 @@ const views = {
 
     return h('div', {}, [
       h('h1', {}, ['Review']),
+      // The count is re-read from the list rather than frozen at render
+      // time. Deciding on one card removes it, so a number fixed when the
+      // page loaded says "10 suggestions waiting" above four of them.
       h('p', { class: 'lede' }, [
-        `${pending.length} suggestion${pending.length === 1 ? '' : 's'} waiting. These are proposals — ` +
+        h('span', { class: 'js-pending-count' }, [String(pending.length)]),
+        ` suggestion${pending.length === 1 ? '' : 's'} waiting. These are proposals — ` +
           'they are not part of your memory until you accept them, and declining one is recorded too.',
       ]),
       bulkBar,
+      reviewShortcuts(),
       list,
     ]);
   },
@@ -395,7 +401,7 @@ const views = {
       ...open.map((c) =>
         h('div', { class: 'card conflict' }, [
           h('div', { class: 'meta' }, [
-            `${c.kind} · found by ${c.detected_by}${c.confidence ? ` · confidence ${c.confidence}` : ''}`,
+            `${c.kind} · found by ${c.detected_by}${c.confidence ? ` · confidence ${pct(c.confidence)}` : ''}`,
           ]),
           c.detail?.reason ? h('p', { class: 'body' }, [c.detail.reason]) : null,
           h('div', { style: 'margin-top:10px;display:flex;flex-direction:column;gap:4px' }, [
@@ -1030,15 +1036,91 @@ function objectCard(o) {
   ]);
 }
 
+/**
+ * How sure the system is, as something you can see rather than read.
+ *
+ * The score is the most useful thing on this screen — it is what
+ * `--accept-above` sorts by and what a lot of work went into making vary at
+ * all — and it used to be a fragment at the end of a provider string:
+ * `create relation · proposed by builtin (chitraq-hashing-ngram-v1) ·
+ * confidence 0.5`. Invisible while scanning, which is the only way this
+ * screen is ever read.
+ *
+ * @param {number|null|undefined} value
+ */
+function confidenceMeter(value) {
+  if (value == null) return null;
+
+  // Named `percent`, not `pct`: there is a `pct()` helper at module scope and
+  // a local of the same name shadowing it is how somebody later calls the
+  // number instead of the function.
+  const percent = Math.round(Math.max(0, Math.min(1, value)) * 100);
+
+  // Three bands rather than a gradient: the score is a sorting aid, not a
+  // measurement, and a smooth ramp would imply precision it does not have.
+  const band = percent >= 70 ? 'high' : percent >= 45 ? 'mid' : 'low';
+
+  return h('div', { class: `confidence ${band}`, title: `Confidence ${percent}%` }, [
+    h('div', { class: 'confidence-track' }, [
+      h('div', { class: 'confidence-fill', style: `width:${percent}%` }, []),
+    ]),
+    h('span', { class: 'confidence-value' }, [`${percent}%`]),
+  ]);
+}
+
+/**
+ * Which colour a proposal wears.
+ *
+ * The palette already distinguishes user, source, algorithm and AI, and this
+ * file's own header says provenance is the one thing the interface is
+ * opinionated about — but every proposal rendered the same cream, so the
+ * distinction existed only in the stylesheet.
+ *
+ * @param {any} p
+ */
+function proposalOrigin(p) {
+  const provider = String(p.provider ?? '');
+  if (!provider || provider.startsWith('builtin')) return 'algorithm';
+  return 'ai';
+}
+
+/**
+ * Keep the heading honest as cards leave.
+ *
+ * @param {HTMLElement} list
+ */
+function refreshPendingCount(list) {
+  const label = document.querySelector('.js-pending-count');
+  if (label) label.textContent = String(list.querySelectorAll('.card.proposal').length);
+}
+
 /** @param {any} p @param {HTMLElement} list */
 function proposalCard(p, list) {
-  const card = h('div', { class: 'card proposal' }, [
-    h('div', { class: 'meta' }, [
-      `${p.op.replace(/_/g, ' ')} · proposed by ${p.provider ?? 'unknown'}` +
-        `${p.model ? ` (${p.model})` : ''}${p.confidence != null ? ` · confidence ${p.confidence}` : ''}`,
+  const origin = proposalOrigin(p);
+
+  const card = h('div', {
+    class: `card proposal origin-${origin}`,
+    tabindex: '0',
+    'data-proposal': p.id,
+  }, [
+    // The claim first and largest. It is the thing being judged; everything
+    // else on the card is context for judging it.
+    h('p', { class: 'claim' }, [describeProposal(p)]),
+
+    h('div', { class: 'proposal-signals' }, [
+      confidenceMeter(p.confidence),
+      h('span', { class: `badge origin-${origin}` }, [origin === 'ai' ? 'AI' : 'algorithm']),
+      h('span', { class: 'badge kind' }, [p.op.replace(/_/g, ' ')]),
     ]),
-    h('p', { class: 'body' }, [describeProposal(p)]),
+
     p.rationale ? h('div', { class: 'reason' }, [p.rationale]) : null,
+
+    // Demoted to the bottom, small. Worth being able to find, not worth
+    // reading before the sentence it belongs to.
+    h('div', { class: 'meta' }, [
+      `${p.provider ?? 'unknown'}${p.model ? ` · ${p.model}` : ''}`,
+    ]),
+
     h('div', { class: 'actions', style: 'margin-top:12px' }, [
       h('button', {
         class: 'btn primary',
@@ -1047,6 +1129,7 @@ function proposalCard(p, list) {
             const r = await api.post(`/proposals/${p.id}/accept`, {});
             toast(`Added to memory as ${r.applied.kind}.`);
             card.remove();
+            refreshPendingCount(list);
             await refreshStats();
             renderNav();
             if (!list.children.length) renderView();
@@ -1061,6 +1144,7 @@ function proposalCard(p, list) {
           await api.post(`/proposals/${p.id}/reject`, { note: 'declined in review' });
           toast('Declined — kept on record.');
           card.remove();
+          refreshPendingCount(list);
           await refreshStats();
           renderNav();
           if (!list.children.length) renderView();
@@ -1069,6 +1153,18 @@ function proposalCard(p, list) {
     ]),
   ]);
   return card;
+}
+
+/**
+ * A score as a percentage, because 0.5009 is not a thing anyone means.
+ *
+ * The raw float leaked into three places in the interface. It reads as
+ * spurious precision on a number that is deliberately a rough sorting aid.
+ *
+ * @param {number} value
+ */
+function pct(value) {
+  return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 }
 
 /** @param {any} p */
@@ -1110,7 +1206,7 @@ function badgeRow(o, detailed) {
     o.review === 'confirmed' ? badge('confirmed', 'confirmed') : null,
     o.review === 'rejected' ? badge('rejected', 'rejected') : null,
     o.state && o.state !== 'active' ? badge(o.state, 'state') : null,
-    o.confidence != null ? badge(`conf ${o.confidence}`, 'plain') : null,
+    o.confidence != null ? badge(pct(o.confidence), 'plain') : null,
   ]);
 }
 
@@ -1282,4 +1378,101 @@ function toast(message, isError) {
   document.body.append(node);
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => node.remove(), 3200);
+}
+
+/**
+ * Keyboard review.
+ *
+ * This screen exists to be used repeatedly — ten suggestions is a normal
+ * queue and a hundred is not unusual after an import — and it had no
+ * shortcuts at all, so clearing it meant a mouse trip per decision.
+ *
+ * `j`/`k` move, `a` accepts, `d` declines, `Enter` opens what a proposal is
+ * about. Arrow keys work too, because not everybody has met vim.
+ *
+ * Deliberately scoped to this view and detached when it goes away: a global
+ * handler that outlives its screen is how a stray keypress accepts something
+ * on a page that is no longer showing it.
+ *
+ * @param {HTMLElement} list
+ */
+function reviewKeys(list) {
+  let index = -1;
+
+  const cards = () => [...list.querySelectorAll('.card.proposal')];
+
+  /** @param {number} next */
+  const select = (next) => {
+    const all = cards();
+    if (!all.length) return;
+
+    index = Math.max(0, Math.min(all.length - 1, next));
+    for (const [i, card] of all.entries()) card.classList.toggle('is-selected', i === index);
+    all[index].scrollIntoView({ block: 'nearest' });
+    all[index].focus({ preventScroll: true });
+  };
+
+  /** @param {string} label */
+  const press = (label) => {
+    const card = cards()[index];
+    if (!card) return;
+    const button = [...card.querySelectorAll('button')].find((b) => b.textContent === label);
+    // Remember where we were: the card is removed on success, so the next
+    // one should land under the cursor rather than sending it back to the top.
+    const at = index;
+    button?.click();
+    setTimeout(() => select(Math.min(at, cards().length - 1)), 60);
+  };
+
+  /** @param {KeyboardEvent} event */
+  const onKey = (event) => {
+    // Never steal a keystroke from someone typing, and never from a
+    // modified one — `d` is fine, Ctrl-D is the browser's.
+    const target = /** @type {HTMLElement} */ (event.target);
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(target?.tagName ?? '') || target?.isContentEditable) return;
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+
+    // The list was replaced by another view; stop listening.
+    if (!list.isConnected) {
+      document.removeEventListener('keydown', onKey);
+      return;
+    }
+
+    switch (event.key) {
+      case 'j':
+      case 'ArrowDown':
+        event.preventDefault();
+        select(index + 1);
+        break;
+      case 'k':
+      case 'ArrowUp':
+        event.preventDefault();
+        select(index - 1);
+        break;
+      case 'a':
+        event.preventDefault();
+        press('Accept');
+        break;
+      case 'd':
+        event.preventDefault();
+        press('Decline');
+        break;
+      default:
+    }
+  };
+
+  document.addEventListener('keydown', onKey);
+}
+
+/** The shortcut legend shown above the queue. */
+function reviewShortcuts() {
+  /** @param {string} key @param {string} what */
+  const pair = (key, what) => h('span', {}, [h('kbd', {}, [key]), ' ', what]);
+
+  return h('div', { class: 'shortcuts' }, [
+    pair('j', 'next'),
+    pair('k', 'previous'),
+    pair('a', 'accept'),
+    pair('d', 'decline'),
+  ]);
 }
